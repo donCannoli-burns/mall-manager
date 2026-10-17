@@ -1,26 +1,35 @@
 /*
  * store-reprice.js
- * Reprice every item currently in your KoL mall store using Pricegun's current
- * valuation, while respecting a 60-second Pricegun request interval and a
- * 24-hour rerun confirmation guard.
  *
- * KoLmafia JavaScript / Rhino-compatible (ES5-ish syntax on purpose).
+ * Reprice every item currently in your KoL mall store using KoLmafia's current
+ * mall-price snapshot. KoLmafia deliberately defines mall_price as the price of
+ * the 5th cheapest purchasable copy, which avoids chasing a single accidental
+ * bargain listing.
+ *
+ * Pricing flow:
+ *   1. Refresh the player's store inventory.
+ *   2. Bulk-refresh KoL mall prices once with mallPrices("allitems").
+ *   3. Read historicalPrice()/historicalAge() for ONLY stocked store items.
+ *   4. Reprice to the fresh 5th-cheapest market price.
+ *
+ * The bulk market refresh is hard-throttled to no more than once per 60 seconds
+ * across characters using the shared KoLmafia data directory.
  */
 
 var k = require("kolmafia");
 
-var PRICEGUN_BASE = "https://pricegun.loathers.net/api/";
-var PRICEGUN_MIN_INTERVAL_MS = 60 * 1000;
+var MALL_REFRESH_MIN_INTERVAL_MS = 60 * 1000;
 var RERUN_GUARD_MS = 24 * 60 * 60 * 1000;
-var MAX_PRICEGUN_URL_LENGTH = 3500;
+var MAX_MARKET_AGE_DAYS = 5 / 1440; // accept only <= 5-minute-old persisted market data
 var MALL_PRICE_CEILING = 999999999;
 
 var PREF_LAST_RUN = "storeRepriceLastRunMs";
-var PREF_LAST_PRICEGUN = "storeRepriceLastPricegunRequestMs";
+var PREF_LAST_MALL_REFRESH = "storeRepriceLastMallRefreshMs";
 var PREF_LAST_RESULT = "storeRepriceLastResult";
 var PREF_LAST_CHANGED = "storeRepriceLastChangedCount";
+
 var CHANGE_LOG = "store-reprice-changes.tsv";
-var PRICEGUN_THROTTLE_FILE = "store-reprice-pricegun-throttle.txt";
+var MALL_THROTTLE_FILE = "store-reprice-mall-throttle.txt";
 var MAX_LOG_LINES = 2000;
 
 function toNumber(value, fallback) {
@@ -40,22 +49,28 @@ function formatDuration(ms) {
   var hours = Math.floor(seconds / 3600);
   seconds -= hours * 3600;
   var minutes = Math.floor(seconds / 60);
+  seconds -= minutes * 60;
   var parts = [];
   if (days) parts.push(days + "d");
   if (hours || days) parts.push(hours + "h");
-  parts.push(minutes + "m");
+  if (minutes || hours || days) parts.push(minutes + "m");
+  if (!parts.length) parts.push(seconds + "s");
   return parts.join(" ");
 }
 
 function getRunState() {
   var now = k.nowToInt();
   var lastRun = prefNumber(PREF_LAST_RUN);
-  var lastPricegun = prefNumber(PREF_LAST_PRICEGUN);
+  var lastMallRefresh = Math.max(
+    prefNumber(PREF_LAST_MALL_REFRESH),
+    globalMallTimestamp()
+  );
   var age = lastRun > 0 ? now - lastRun : -1;
+
   return {
     nowMs: now,
     lastRunMs: lastRun,
-    lastPricegunMs: lastPricegun,
+    lastMallRefreshMs: lastMallRefresh,
     ageMs: age,
     recent: lastRun > 0 && age >= 0 && age < RERUN_GUARD_MS
   };
@@ -71,21 +86,17 @@ function clampTargetPrice(it, value) {
   return Math.min(MALL_PRICE_CEILING, Math.max(legalMallFloor(it), rounded));
 }
 
-function decimalNumber(value) {
-  if (value && typeof value === "object" && value.__decimal__ !== undefined) {
-    return toNumber(value.__decimal__, NaN);
-  }
-  return toNumber(value, NaN);
-}
-
 function listStoreItems() {
   k.refreshShop();
+
   var all = Item.all();
   var result = [];
   var i;
+
   for (i = 0; i < all.length; i++) {
     var it = all[i];
     var qty = k.shopAmount(it);
+
     if (qty > 0) {
       result.push({
         item: it,
@@ -96,97 +107,77 @@ function listStoreItems() {
       });
     }
   }
+
   return result;
 }
 
-function splitIntoPricegunBatches(ids) {
-  var batches = [];
-  var current = [];
-  var currentLength = PRICEGUN_BASE.length;
-  var i;
-
-  for (i = 0; i < ids.length; i++) {
-    var part = String(ids[i]);
-    var extra = part.length + (current.length ? 1 : 0);
-    if (current.length && currentLength + extra > MAX_PRICEGUN_URL_LENGTH) {
-      batches.push(current);
-      current = [];
-      currentLength = PRICEGUN_BASE.length;
-      extra = part.length;
-    }
-    current.push(ids[i]);
-    currentLength += extra;
-  }
-  if (current.length) batches.push(current);
-  return batches;
-}
-
-function globalPricegunTimestamp() {
-  var raw = String(k.fileToBuffer(PRICEGUN_THROTTLE_FILE) || "").trim();
+function globalMallTimestamp() {
+  var raw = String(k.fileToBuffer(MALL_THROTTLE_FILE) || "").trim();
   return toNumber(raw, 0);
 }
 
-function throttlePricegun() {
+/*
+ * Refresh KoL's mall-price snapshot once. This follows the same basic strategy
+ * used by CONSUME.ash via loathers/mall-check: ask KoL's mallprices API for a
+ * bulk current snapshot, then consume KoLmafia's cached/persisted prices.
+ *
+ * If another invocation refreshed less than 60 seconds ago, do not ping KoL
+ * again. The just-written mallprices.txt values are reused instead.
+ */
+function refreshMallSnapshot() {
   var now = k.nowToInt();
-  var last = globalPricegunTimestamp();
-  var elapsed = last > 0 ? now - last : PRICEGUN_MIN_INTERVAL_MS;
-  if (elapsed < PRICEGUN_MIN_INTERVAL_MS) {
-    var waitSeconds = Math.ceil((PRICEGUN_MIN_INTERVAL_MS - elapsed) / 1000);
-    k.print("Pricegun throttle: waiting " + waitSeconds + "s before the next request.");
-    k.wait(waitSeconds);
+  var last = globalMallTimestamp();
+  var elapsed = last > 0 ? now - last : MALL_REFRESH_MIN_INTERVAL_MS;
+
+  if (elapsed >= 0 && elapsed < MALL_REFRESH_MIN_INTERVAL_MS) {
+    k.print(
+      "Mall-price throttle: reusing the snapshot refreshed " +
+      Math.floor(elapsed / 1000) +
+      "s ago; no new mall-price request sent."
+    );
+    k.setProperty(PREF_LAST_MALL_REFRESH, String(last));
+    return {
+      refreshed: false,
+      timestampMs: last,
+      updatedCount: -1
+    };
   }
 
-  // Record the timestamp BEFORE the request. If the request/script crashes, the
-  // next invocation will still respect the 60-second request boundary.
+  // Write the throttle marker before the request. If KoLmafia or the request
+  // fails, another invocation still cannot hammer the endpoint immediately.
   var requestMs = k.nowToInt();
-  k.bufferToFile(String(requestMs) + "\n", PRICEGUN_THROTTLE_FILE);
-  // Also mirror it to the current character preference for easy inspection/UI.
-  k.setProperty(PREF_LAST_PRICEGUN, String(requestMs));
+  k.bufferToFile(String(requestMs) + "\n", MALL_THROTTLE_FILE);
+  k.setProperty(PREF_LAST_MALL_REFRESH, String(requestMs));
+
+  k.print("Refreshing KoL mall-price snapshot (one bulk allitems request)...");
+  var updated = k.mallPrices("allitems");
+  k.print("KoLmafia recorded/refreshed mall prices for " + updated + " item(s).");
+
+  return {
+    refreshed: true,
+    timestampMs: requestMs,
+    updatedCount: updated
+  };
 }
 
-function fetchPricegunBatch(ids) {
-  throttlePricegun();
-  var url = PRICEGUN_BASE + ids.join(",");
-  var raw = String(k.visitUrl(url, false, true));
-  var parsed;
+function currentMarketPrice(it) {
+  /*
+   * historicalPrice() is intentionally used after mallPrices("allitems").
+   * Unlike mallPrice(), it is a pure read of mallprices.txt and cannot trigger
+   * an individual mall search. That keeps this repricer at one bulk market
+   * request instead of potentially one request per store item.
+   */
+  var price = toNumber(k.historicalPrice(it), 0);
+  var ageDays = toNumber(k.historicalAge(it), Infinity);
 
-  try {
-    parsed = JSON.parse(raw);
-  } catch (e) {
-    throw new Error("Pricegun returned non-JSON data for " + ids.length + " item(s): " + e);
+  if (price <= 0 || ageDays < 0 || ageDays > MAX_MARKET_AGE_DAYS) {
+    return null;
   }
 
-  if (parsed && parsed.error) {
-    throw new Error("Pricegun error: " + parsed.error);
-  }
-  return parsed instanceof Array ? parsed : [parsed];
-}
-
-function fetchPricegunValues(storeRows) {
-  var ids = [];
-  var i;
-  for (i = 0; i < storeRows.length; i++) ids.push(storeRows[i].id);
-
-  var batches = splitIntoPricegunBatches(ids);
-  var byId = {};
-  var b;
-
-  for (b = 0; b < batches.length; b++) {
-    k.print("Pricegun request " + (b + 1) + "/" + batches.length + " (" + batches[b].length + " items)");
-    var rows = fetchPricegunBatch(batches[b]);
-    for (i = 0; i < rows.length; i++) {
-      var row = rows[i];
-      if (!row || row.itemId === undefined) continue;
-      var value = decimalNumber(row.value);
-      if (!isFinite(value) || value <= 0) continue;
-      byId[String(Number(row.itemId))] = {
-        value: value,
-        volume: toNumber(row.volume, 0),
-        date: row.date ? String(row.date) : ""
-      };
-    }
-  }
-  return byId;
+  return {
+    price: price,
+    ageDays: ageDays
+  };
 }
 
 function cleanField(value) {
@@ -198,58 +189,35 @@ function cleanField(value) {
 function numericLines(linesLike) {
   if (!linesLike) return [];
   if (linesLike instanceof Array) return linesLike;
+
   var keys = Object.keys(linesLike);
-  keys.sort(function (a, b) { return Number(a) - Number(b); });
+  keys.sort(function (a, b) {
+    return Number(a) - Number(b);
+  });
+
   var out = [];
   var i;
   for (i = 0; i < keys.length; i++) out.push(String(linesLike[keys[i]]));
   return out;
 }
 
-function appendChangeLog(changes) {
-  if (!changes.length) return;
-  var oldLines = numericLines(k.fileToArray(CHANGE_LOG));
-  var header = "run_ms\titem_id\titem_name\tquantity\told_price\ttarget_price\tapplied_price\tstatus\tpricegun_value\tpricegun_volume";
-  var lines = [];
-  var i;
+function parseLogRow(line) {
+  if (!line || !/^\d+\t/.test(line)) return null;
 
-  if (!oldLines.length || oldLines[0] !== header) lines.push(header);
-  for (i = 0; i < oldLines.length; i++) {
-    if (oldLines[i] && oldLines[i] !== header) lines.push(oldLines[i]);
-  }
+  var p = line.split("\t");
+  if (p.length < 10) return null;
 
-  for (i = 0; i < changes.length; i++) {
-    var c = changes[i];
-    lines.push([
-      c.runMs,
-      c.id,
-      cleanField(c.name),
-      c.qty,
-      c.oldPrice,
-      c.targetPrice,
-      c.appliedPrice,
-      cleanField(c.status),
-      c.pricegunValue,
-      c.pricegunVolume
-    ].join("\t"));
-  }
-
-  if (lines.length > MAX_LOG_LINES + 1) {
-    lines = [header].concat(lines.slice(lines.length - MAX_LOG_LINES));
-  }
-  k.bufferToFile(lines.join("\n") + "\n", CHANGE_LOG);
-}
-
-function readChangeLog(limit) {
-  var lines = numericLines(k.fileToArray(CHANGE_LOG));
-  var out = [];
-  var start = Math.max(1, lines.length - (limit || 100));
-  var i;
-  for (i = start; i < lines.length; i++) {
-    if (!lines[i]) continue;
-    var p = lines[i].split("\t");
-    if (p.length < 10) continue;
-    out.push({
+  /*
+   * v2 rows:
+   * run_ms id name qty old target applied status market_price age_days source
+   *
+   * v1 rows from the original Pricegun build had:
+   * run_ms id name qty old target applied status pricegun_value pricegun_volume
+   *
+   * Preserve them as legacy evidence instead of silently relabeling them.
+   */
+  if (p.length >= 11) {
+    return {
       runMs: toNumber(p[0], 0),
       id: toNumber(p[1], 0),
       name: p[2],
@@ -258,64 +226,153 @@ function readChangeLog(limit) {
       targetPrice: toNumber(p[5], 0),
       appliedPrice: toNumber(p[6], 0),
       status: p[7],
-      pricegunValue: toNumber(p[8], 0),
-      pricegunVolume: toNumber(p[9], 0)
-    });
+      marketPrice: toNumber(p[8], 0),
+      marketAgeDays: toNumber(p[9], -1),
+      source: p[10]
+    };
   }
-  return out.reverse();
+
+  return {
+    runMs: toNumber(p[0], 0),
+    id: toNumber(p[1], 0),
+    name: p[2],
+    qty: toNumber(p[3], 0),
+    oldPrice: toNumber(p[4], 0),
+    targetPrice: toNumber(p[5], 0),
+    appliedPrice: toNumber(p[6], 0),
+    status: p[7],
+    marketPrice: toNumber(p[8], 0),
+    marketAgeDays: -1,
+    source: "legacy_pricegun(volume=" + cleanField(p[9]) + ")"
+  };
+}
+
+function readChangeLog(limit) {
+  var lines = numericLines(k.fileToArray(CHANGE_LOG));
+  var out = [];
+  var i;
+
+  for (i = 0; i < lines.length; i++) {
+    var row = parseLogRow(lines[i]);
+    if (row) out.push(row);
+  }
+
+  out.reverse();
+  if (limit && out.length > limit) out = out.slice(0, limit);
+  return out;
+}
+
+function serializeLogRow(c) {
+  return [
+    c.runMs,
+    c.id,
+    cleanField(c.name),
+    c.qty,
+    c.oldPrice,
+    c.targetPrice,
+    c.appliedPrice,
+    cleanField(c.status),
+    c.marketPrice,
+    c.marketAgeDays,
+    cleanField(c.source)
+  ].join("\t");
+}
+
+function appendChangeLog(changes) {
+  if (!changes.length) return;
+
+  var existingNewestFirst = readChangeLog(MAX_LOG_LINES);
+  var rows = existingNewestFirst.reverse().concat(changes);
+
+  if (rows.length > MAX_LOG_LINES) {
+    rows = rows.slice(rows.length - MAX_LOG_LINES);
+  }
+
+  var header =
+    "run_ms\titem_id\titem_name\tquantity\told_price\ttarget_price\tapplied_price\tstatus\tmarket_price\tmarket_age_days\tsource";
+  var lines = [header];
+  var i;
+
+  for (i = 0; i < rows.length; i++) {
+    lines.push(serializeLogRow(rows[i]));
+  }
+
+  k.bufferToFile(lines.join("\n") + "\n", CHANGE_LOG);
 }
 
 function runReprice(forceRecent) {
   var state = getRunState();
+
   if (state.recent && !forceRecent) {
     var ok = k.userConfirm(
-      "Store repricer last completed " + formatDuration(state.ageMs) +
-      " ago (less than 24 hours). Run it again anyway?"
+      "Store repricer last completed " +
+        formatDuration(state.ageMs) +
+        " ago (less than 24 hours). Run it again anyway?"
     );
+
     if (!ok) {
-      k.print("Store repricer cancelled; no Pricegun request or price change was made.");
-      return { ok: false, cancelled: true, message: "Cancelled by user." };
+      k.print("Store repricer cancelled; no mall-price refresh or store change was made.");
+      return {
+        ok: false,
+        cancelled: true,
+        message: "Cancelled by user."
+      };
     }
   }
 
   var storeRows = listStoreItems();
+
   if (!storeRows.length) {
     k.print("Your mall store is empty; nothing to reprice.");
-    return { ok: true, changed: 0, message: "Store is empty." };
+    return {
+      ok: true,
+      changed: 0,
+      message: "Store is empty."
+    };
   }
 
   k.print("Found " + storeRows.length + " distinct item(s) in your mall store.");
 
-  var pricegun;
   try {
-    // All Pricegun reads happen before any store mutation. If a batch fails,
-    // nothing has been repriced yet.
-    pricegun = fetchPricegunValues(storeRows);
+    refreshMallSnapshot();
   } catch (e) {
-    k.setProperty(PREF_LAST_RESULT, "ERROR: " + String(e));
-    k.print("Repricing aborted before any store changes: " + e);
-    return { ok: false, changed: 0, message: String(e) };
-  }
-
-  if (!Object.keys(pricegun).length) {
-    var noData = "Pricegun returned no usable valuations; no store prices were changed.";
-    k.setProperty(PREF_LAST_RESULT, noData);
-    k.print(noData);
-    return { ok: false, changed: 0, message: noData };
+    var refreshError = "Mall-price refresh failed before repricing: " + String(e);
+    k.setProperty(PREF_LAST_RESULT, refreshError);
+    k.print(refreshError);
+    return {
+      ok: false,
+      changed: 0,
+      message: refreshError
+    };
   }
 
   var pending = [];
-  var skippedNoData = 0;
+  var skippedNoMarket = 0;
+  var unchanged = 0;
   var i;
+
   for (i = 0; i < storeRows.length; i++) {
     var row = storeRows[i];
-    var pg = pricegun[String(row.id)];
-    if (!pg) {
-      skippedNoData++;
+    var market = currentMarketPrice(row.item);
+
+    // Fail closed: never fall back to stale data or trigger an individual search.
+    if (!market) {
+      skippedNoMarket++;
       continue;
     }
-    var target = clampTargetPrice(row.item, pg.value);
-    if (target <= 0 || target === row.oldPrice) continue;
+
+    var target = clampTargetPrice(row.item, market.price);
+
+    if (target <= 0) {
+      skippedNoMarket++;
+      continue;
+    }
+
+    if (target === row.oldPrice) {
+      unchanged++;
+      continue;
+    }
+
     pending.push({
       item: row.item,
       id: row.id,
@@ -323,19 +380,27 @@ function runReprice(forceRecent) {
       qty: row.qty,
       oldPrice: row.oldPrice,
       targetPrice: target,
-      pricegunValue: pg.value,
-      pricegunVolume: pg.volume
+      marketPrice: market.price,
+      marketAgeDays: market.ageDays
     });
   }
 
   var batchOk = true;
+
   if (pending.length) {
-    k.print("Applying " + pending.length + " price change(s) using KoLmafia's batched reprice_shop().");
+    k.print(
+      "Applying " +
+        pending.length +
+        " price change(s) using KoLmafia's 5th-cheapest mall price."
+    );
+
     k.batchOpen();
+
     for (i = 0; i < pending.length; i++) {
-      // Two-argument repriceShop preserves the current per-customer limit.
+      // The two-argument form preserves the store's existing per-customer limit.
       k.repriceShop(pending[i].targetPrice, pending[i].item);
     }
+
     batchOk = k.batchClose();
     k.refreshShop();
   }
@@ -344,12 +409,15 @@ function runReprice(forceRecent) {
   var changes = [];
   var applied = 0;
   var failed = 0;
+
   for (i = 0; i < pending.length; i++) {
     var p = pending[i];
     var actual = k.shopPrice(p.item);
     var status = actual === p.targetPrice ? "applied" : "verify_failed";
+
     if (status === "applied") applied++;
     else failed++;
+
     changes.push({
       runMs: runMs,
       id: p.id,
@@ -359,23 +427,33 @@ function runReprice(forceRecent) {
       targetPrice: p.targetPrice,
       appliedPrice: actual,
       status: status,
-      pricegunValue: p.pricegunValue,
-      pricegunVolume: p.pricegunVolume
+      marketPrice: p.marketPrice,
+      marketAgeDays: p.marketAgeDays,
+      source: "kolmafia_5th_cheapest"
     });
   }
 
   appendChangeLog(changes);
 
-  // Record a completed run even on partial mutation failure: at that point some
-  // store prices may already have changed, so the next run should require the
-  // explicit <24h confirmation rather than silently trying again.
+  /*
+   * Record a completed run even on a partial mutation failure. Some prices may
+   * already have changed, so a retry inside 24h should require explicit consent.
+   */
   k.setProperty(PREF_LAST_RUN, String(runMs));
   k.setProperty(PREF_LAST_CHANGED, String(applied));
 
   var summary =
-    "Completed: " + applied + " applied, " + failed + " failed verification, " +
-    skippedNoData + " skipped for missing Pricegun data" +
+    "Completed: " +
+    applied +
+    " applied, " +
+    failed +
+    " failed verification, " +
+    unchanged +
+    " already at market, " +
+    skippedNoMarket +
+    " skipped for missing/stale market data" +
     (batchOk ? "." : "; KoLmafia reported a batch failure.");
+
   k.setProperty(PREF_LAST_RESULT, summary);
   k.print(summary);
 
@@ -383,7 +461,8 @@ function runReprice(forceRecent) {
     ok: batchOk && failed === 0,
     changed: applied,
     failed: failed,
-    skippedNoData: skippedNoData,
+    unchanged: unchanged,
+    skippedNoMarket: skippedNoMarket,
     message: summary
   };
 }
