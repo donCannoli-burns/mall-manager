@@ -142,6 +142,7 @@ KoL `pwd` / `pwdhash` values are redacted before that file is written. The dashb
 
 - **Export HTML** downloads the current rendered Mall Manager dashboard as a standalone HTML snapshot, including the capture diagnostics section.
 - **Export CSV** downloads the full accumulated `data/mall-manager-sales.csv` ledger in the same 7-column analyzer-compatible format.
+- The dashboard includes four interactive exploded SVG pie charts for top buyers/items by units and Meat. Slices pop outward on hover/focus, show value + percentage tooltips, and can be clicked to pin/unpin.
 
 Transactions are deduplicated by normalized date/time/player/item/quantity/total plus occurrence count, so legitimate duplicate-looking transactions in the same second are preserved while repeated Store Log captures are not re-added.
 
