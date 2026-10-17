@@ -33,7 +33,9 @@ string strip_tags(string value) {
 
 string normalize_space(string value) {
 	value = replace_string(value, "&nbsp;", " ");
-	return trim(replace_all(create_matcher("\\s+", value), " "));
+	value = replace_all(create_matcher("\\s+", value), " ");
+	value = replace_all(create_matcher("^\\s+|\\s+$", value), "");
+	return value;
 }
 
 int comma_int(string value) {
@@ -150,8 +152,9 @@ void main() {
 	buffer page = visit_url();
 
 	mall_sale[int] sales = parse_store_log(page);
+	string page_text = page.to_string();
 	boolean is_store_log =
-		page.contains_text("Recent Store Activity") ||
+		contains_text(page_text, "Recent Store Activity") ||
 		count(sales) > 0;
 
 	boolean saved = true;
