@@ -16,7 +16,6 @@
 var k = require("kolmafia");
 var repricer = require("../scripts/store-reprice.js");
 
-var SELF = "/relay_store_reprice.js";
 var SALES_CURRENT_FILE = "mall-manager-sales-current.csv";
 var SALES_HISTORY_FILE = "mall-manager-sales.csv";
 var BACKOFFICE_DEBUG_FILE = "mall-manager-backoffice-debug.html";
@@ -706,7 +705,7 @@ function renderPage(notice, needsRecentConfirm) {
 
   if (needsRecentConfirm) {
     html.push("<div class='notice warning'><b>24-hour guard:</b> this repricer completed " + esc(repricer.formatDuration(state.ageMs)) + " ago. Run again anyway?");
-    html.push("<form method='post' action='" + SELF + "' style='margin-top:10px'>");
+    html.push("<form method='post' style='margin-top:10px'>");
     html.push("<input type='hidden' name='action' value='run'><input type='hidden' name='confirm_recent' value='1'>");
     html.push("<button class='danger' type='submit'>Yes, run again</button></form></div>");
   }
@@ -714,7 +713,7 @@ function renderPage(notice, needsRecentConfirm) {
   html.push("<div class='actions'>");
   html.push("<button type='button' id='syncSalesButton' onclick='syncSales()'>Refresh sales dashboard</button>");
   html.push("<button type='button' class='secondary' onclick='exportDebugHtml()'>Export debug HTML</button>");
-  html.push("<form class='inline' method='post' action='" + SELF + "'><input type='hidden' name='action' value='run'><button type='submit'>Run repricer now</button></form>");
+  html.push("<form class='inline' method='post'><input type='hidden' name='action' value='run'><button type='submit'>Run repricer now</button></form>");
   html.push("<a class='btn secondary' href='/backoffice.php?which=3'>Native store log</a>");
   html.push("<a class='btn secondary' href='/backoffice.php?which=1'>Store inventory</a>");
   html.push("<span id='syncSalesStatus' class='tiny'></span>");
@@ -876,7 +875,7 @@ function renderPage(notice, needsRecentConfirm) {
   html.push("<script>");
   html.push("function filterItems(){var q=(document.getElementById('itemSearch').value||'').toLowerCase();var rows=document.querySelectorAll('#itemDetailTable tbody tr');for(var i=0;i<rows.length;i++){var t=(rows[i].textContent||'').toLowerCase();rows[i].style.display=t.indexOf(q)>=0?'':'none';}}");
   html.push("function syncSales(){var f=document.getElementById('salesSyncFrame');var b=document.getElementById('syncSalesButton');var s=document.getElementById('syncSalesStatus');if(!f)return;f.dataset.active='1';if(b)b.disabled=true;if(s)s.textContent='Capturing Store Log to CSV…';f.src='/backoffice.php?which=3&mallmanager_sync=1&_mm='+Date.now();}");
-  html.push("function salesSyncLoaded(){var f=document.getElementById('salesSyncFrame');if(!f||f.dataset.active!=='1')return;f.dataset.active='0';var s=document.getElementById('syncSalesStatus');if(s)s.textContent='Capture finished; reloading dashboard…';window.setTimeout(function(){window.location.replace('/relay_store_reprice.js?sync=ok&_mm='+Date.now());},100);}");
+  html.push("function salesSyncLoaded(){var f=document.getElementById('salesSyncFrame');if(!f||f.dataset.active!=='1')return;f.dataset.active='0';var s=document.getElementById('syncSalesStatus');if(s)s.textContent='Capture finished; reloading dashboard…';window.setTimeout(function(){window.location.reload();},100);}");
   html.push("function exportDebugHtml(){var d=document.getElementById('debugBundle');if(d)d.open=true;var source='<!doctype html>\\n'+document.documentElement.outerHTML;var blob=new Blob([source],{type:'text/html;charset=utf-8'});var url=URL.createObjectURL(blob);var a=document.createElement('a');a.href=url;a.download='mall-manager-debug-'+new Date().toISOString().replace(/[:.]/g,'-')+'.html';document.body.appendChild(a);a.click();document.body.removeChild(a);window.setTimeout(function(){URL.revokeObjectURL(url);},1000);}");
   html.push("</script>");
 
