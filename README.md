@@ -107,17 +107,17 @@ Sales originate from KoL's actual Store Log page:
 backoffice.php?which=3
 ```
 
-Mall Manager does **not** scrape that page from inside the dashboard relay. Instead, `relay/backoffice.ash` is a small pass-through capture hook. KoLmafia's no-argument `visit_url()` retrieves the real native backoffice response, the hook parses the Store Log, writes a CSV snapshot, and then returns the native page unchanged.
+Mall Manager does **not** request the Store Log from inside the dashboard relay. Instead, `relay/backoffice.ash` is a small pass-through capture hook. KoLmafia's no-argument `visit_url()` retrieves the real native backoffice response, sanitizes it, saves it to `data/mall-manager-backoffice-debug.html`, and returns the native page unchanged. The JavaScript relay then parses that saved HTML into the CSV snapshot/history. This keeps ASH out of the transaction-parsing path.
 
 The **Refresh sales dashboard** button loads the Store Log through a hidden iframe, so the operator stays on Mall Manager while `relay/backoffice.ash` captures the page. When the hidden request finishes, the dashboard reloads itself.
 
-The capture hook writes:
+After the hidden capture finishes, Mall Manager reloads the current relay page. The JavaScript relay parses the saved Store Log HTML and writes:
 
 ```text
 data/mall-manager-sales-current.csv
 ```
 
-and redirects back to Mall Manager. The dashboard then merges/deduplicates that snapshot into the durable ledger:
+The dashboard then merges/deduplicates that snapshot into the durable ledger:
 
 ```text
 data/mall-manager-sales.csv
