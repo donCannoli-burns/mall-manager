@@ -71,50 +71,104 @@ mall_sale[int] parse_store_log(buffer page) {
 	mall_sale[int] sales;
 
 	/*
-	 * Keep the transaction matcher deliberately close to JimmyKing's proven
-	 * backoffice.ash parser:
+	 * Parse with literal delimiters instead of a transaction regex.
 	 *
-	 *   :\d+ (.+) bought (\d+) \((.*?)\) for (\d+)
+	 * KoL's Store Log has a stable shape:
+	 *   DATE TIME <a...><b>PLAYER</b></a> bought QTY (ITEM) for TOTAL Meat.
 	 *
-	 * Match against the raw Meat.-delimited chunk first, then strip markup
-	 * from the captured player/item fields. This avoids relying on the more
-	 * elaborate date-first/whitespace regex which proved incompatible in the
-	 * user's KoLmafia ASH runtime.
+	 * Splitting on "Meat." leaves one sale at the end of each chunk. Literal
+	 * string operations are intentionally used here for compatibility with
+	 * older KoLmafia ASH runtimes.
 	 */
-	string[int] chunks = split_string(page.to_string(), "Meat.");
+	string[int] chunks = split_string(page.to_string(), "Meat\\.");
 
 	foreach i, raw in chunks {
-		matcher sale_matcher = create_matcher(
-			":\\d+ (.+) bought ([\\d,]+) \\((.*?)\\) for ([\\d,]+)",
-			raw
-		);
-
-		if (!sale_matcher.find()) {
+		int bought_at = last_index_of(raw, " bought ");
+		if (bought_at < 0) {
 			continue;
 		}
 
-		string player = normalize_space(strip_tags(sale_matcher.group(1)));
-		string item_name = normalize_space(strip_tags(sale_matcher.group(3)));
-		int quantity = comma_int(sale_matcher.group(2));
-		int total_meat = comma_int(sale_matcher.group(4));
+		int player_open = last_index_of(raw, "<b>", bought_at);
+		int player_close =
+			player_open >= 0 ? index_of(raw, "</b>", player_open + 3) : -1;
 
-		if (player == "" || item_name == "" || quantity <= 0 || total_meat < 0) {
+		if (
+			player_open < 0 ||
+			player_close < 0 ||
+			player_close > bought_at
+		) {
+			continue;
+		}
+
+		string player =
+			normalize_space(substring(raw, player_open + 3, player_close));
+
+		string after_bought = substring(raw, bought_at + length(" bought "));
+		int qty_end = index_of(after_bought, " (");
+		int item_end =
+			qty_end >= 0
+				? index_of(after_bought, ") for ", qty_end + 2)
+				: -1;
+
+		if (qty_end < 0 || item_end < 0) {
+			continue;
+		}
+
+		string quantity_text =
+			normalize_space(substring(after_bought, 0, qty_end));
+		string item_name =
+			normalize_space(
+				substring(after_bought, qty_end + 2, item_end)
+			);
+		string total_text =
+			normalize_space(
+				substring(after_bought, item_end + length(") for "))
+			);
+
+		int quantity = comma_int(quantity_text);
+		int total_meat = comma_int(total_text);
+
+		if (
+			player == "" ||
+			item_name == "" ||
+			quantity <= 0 ||
+			total_meat < 0
+		) {
 			continue;
 		}
 
 		string sale_date = "";
 		string sale_time = "";
 
-		// Date/time are metadata only; a timestamp-parser failure must never
-		// discard an otherwise valid sale transaction.
-		matcher stamp_matcher = create_matcher(
-			"(\\d+/\\d+/\\d+) (\\d+:\\d+:\\d+)",
-			raw
-		);
+		/*
+		 * The date/time sit immediately before the player's <a> tag.
+		 * They are useful metadata, but failure to recover them must not
+		 * discard an otherwise valid transaction.
+		 */
+		int anchor_open = last_index_of(raw, "<a", bought_at);
+		if (anchor_open >= 0) {
+			int previous_tag_end = last_index_of(raw, ">", anchor_open);
 
-		if (stamp_matcher.find()) {
-			sale_date = stamp_matcher.group(1);
-			sale_time = stamp_matcher.group(2);
+			if (previous_tag_end >= 0) {
+				string stamp =
+					normalize_space(
+						substring(
+							raw,
+							previous_tag_end + 1,
+							anchor_open
+						)
+					);
+
+				int stamp_space = index_of(stamp, " ");
+				if (stamp_space > 0) {
+					sale_date =
+						substring(stamp, 0, stamp_space);
+					sale_time =
+						normalize_space(
+							substring(stamp, stamp_space + 1)
+						);
+				}
+			}
 		}
 
 		int n = count(sales);
