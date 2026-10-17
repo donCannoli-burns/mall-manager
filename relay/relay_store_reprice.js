@@ -19,6 +19,7 @@ var repricer = require("../scripts/store-reprice.js");
 var SELF = "/relay_store_reprice.js";
 var SALES_CURRENT_FILE = "mall-manager-sales-current.csv";
 var SALES_HISTORY_FILE = "mall-manager-sales.csv";
+var BACKOFFICE_DEBUG_FILE = "mall-manager-backoffice-debug.html";
 var SALES_HISTORY_MAX_ROWS = 100000;
 
 function esc(value) {
@@ -96,6 +97,54 @@ function numericLines(linesLike) {
   var i;
   for (i = 0; i < keys.length; i++) out.push(String(linesLike[keys[i]]));
   return out;
+}
+
+function safeFileLines(filename) {
+  try {
+    return numericLines(k.fileToArray(filename));
+  } catch (e) {
+    return [];
+  }
+}
+
+function sampleLines(lines, headCount, tailCount) {
+  if (!lines || !lines.length) return "";
+
+  headCount = Math.max(0, Number(headCount) || 0);
+  tailCount = Math.max(0, Number(tailCount) || 0);
+
+  if (lines.length <= headCount + tailCount) {
+    return lines.join("\n");
+  }
+
+  var out = lines.slice(0, headCount);
+  out.push(
+    "... " +
+      number(lines.length - headCount - tailCount) +
+      " line(s) omitted ..."
+  );
+
+  if (tailCount > 0) {
+    out = out.concat(lines.slice(lines.length - tailCount));
+  }
+
+  return out.join("\n");
+}
+
+function debugHtmlExcerpt(lines) {
+  var text = (lines || []).join("\n");
+  if (!text) return "";
+
+  var lower = text.toLowerCase();
+  var at = lower.indexOf("bought");
+
+  if (at >= 0) {
+    var start = Math.max(0, at - 12000);
+    var end = Math.min(text.length, at + 60000);
+    return text.substring(start, end);
+  }
+
+  return text.substring(0, Math.min(text.length, 70000));
 }
 
 function parseIntLoose(value) {
@@ -568,6 +617,18 @@ function renderPage(notice, needsRecentConfirm) {
   var lastCaptureMs = Number(k.getProperty("mallManagerSalesLastCaptureMs")) || 0;
   var lastCaptureCount =
     Number(k.getProperty("mallManagerSalesLastCaptureCount")) || 0;
+  var lastHookMs = Number(k.getProperty("mallManagerSalesLastHookMs")) || 0;
+  var lastHookPageChars =
+    Number(k.getProperty("mallManagerSalesLastHookPageChars")) || 0;
+  var lastHookParsedCount =
+    Number(k.getProperty("mallManagerSalesLastHookParsedCount")) || 0;
+  var lastHookLookedLikeStoreLog =
+    String(k.getProperty("mallManagerSalesLastHookLookedLikeStoreLog") || "");
+  var lastHookWriteOk =
+    String(k.getProperty("mallManagerSalesLastHookWriteOk") || "");
+  var currentRawLines = safeFileLines(SALES_CURRENT_FILE);
+  var historyRawLines = safeFileLines(SALES_HISTORY_FILE);
+  var backofficeDebugLines = safeFileLines(BACKOFFICE_DEBUG_FILE);
 
   try {
     currentSales = readCurrentSales();
@@ -581,14 +642,17 @@ function renderPage(notice, needsRecentConfirm) {
 
       if (!lastCaptureMs) {
         salesError =
-          "No Store Log CSV has been captured yet. Use Refresh sales dashboard to visit which=3 through the capture hook.";
+          "No Store Log CSV has been captured yet. Use Refresh sales dashboard to run the backoffice capture hook.";
+      } else if (lastCaptureCount === 0) {
+        salesError =
+          "The capture hook ran, but it parsed 0 Store Log transactions. Use Export debug HTML and send me that file; it now includes the local CSV and sanitized backoffice capture.";
       } else if (lastCaptureCount > 0) {
         salesError =
           "The last backoffice capture reported " +
           lastCaptureCount +
           " sale(s), but data/" +
           SALES_CURRENT_FILE +
-          " could not be read.";
+          " parsed as 0 rows. Export debug HTML will include the exact CSV for diagnosis.";
       }
     }
   } catch (e) {
@@ -622,7 +686,7 @@ function renderPage(notice, needsRecentConfirm) {
   html.push("*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#15181c,#0f1113 420px);color:var(--text);font:14px/1.45 system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}");
   html.push(".wrap{max-width:1380px;margin:0 auto;padding:24px}.hero{padding:6px 0 18px}.hero h1{font-size:34px;letter-spacing:-.03em;margin:0}.sub{color:var(--muted);margin-top:5px}");
   html.push(".actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0 18px}.inline{display:inline}.btn,button{appearance:none;border:1px solid #4a90d9;background:#1f6fb2;color:#fff;border-radius:7px;padding:9px 13px;font-weight:700;cursor:pointer;text-decoration:none;font:inherit}.secondary{background:#2a3037;border-color:#4a525d}.danger{background:#8e2f2a;border-color:#c34d45}");
-  html.push(".notice{padding:12px 14px;border:1px solid #35587a;border-radius:9px;background:#172838;margin:12px 0}.warning{border-color:#705d22;background:#302a16}.error{border-color:#7a3535;background:#331d1d}");
+  html.push(".notice{padding:12px 14px;border:1px solid #35587a;border-radius:9px;background:#172838;margin:12px 0}.warning{border-color:#705d22;background:#302a16}.error{border-color:#7a3535;background:#331d1d}.debuggrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:12px 0}.debugbox{background:#101317;border:1px solid #30363d;border-radius:7px;padding:10px}.debugbox b{display:block;font-size:11px;text-transform:uppercase;color:var(--muted);margin-bottom:4px}details.debug{margin:18px 0}details.debug summary{cursor:pointer;padding:14px 16px;font-weight:700}details.debug pre{white-space:pre-wrap;word-break:break-word;max-height:420px;overflow:auto;background:#0d1013;border:1px solid #30363d;border-radius:7px;padding:10px;color:#d8dee9}");
   html.push(".summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin:14px 0 24px}.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:15px}.label{text-transform:uppercase;letter-spacing:.08em;font-size:11px;color:var(--muted)}.metric{font-size:25px;font-weight:800;margin-top:4px}");
   html.push(".section{background:var(--panel);border:1px solid var(--line);border-radius:11px;margin:18px 0;overflow:hidden}.sectionhead{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:10px;align-items:center}.sectionhead h2{font-size:18px;margin:0}.sectionbody{padding:16px}");
   html.push(".twocol{display:grid;grid-template-columns:1fr 1fr;gap:18px}.panel{background:var(--panel2);border:1px solid #30363d;border-radius:9px;padding:14px}.panel h3{margin:0 0 12px;font-size:15px}.charttitle{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin-bottom:10px}");
@@ -631,7 +695,7 @@ function renderPage(notice, needsRecentConfirm) {
   html.push(".tablewrap{overflow:auto;max-height:520px;border:1px solid #30363d;border-radius:7px}.tablewrap.compact{max-height:350px;margin-top:14px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #2b3138;white-space:nowrap;font-variant-numeric:tabular-nums}th{position:sticky;top:0;background:#252a31;color:#dfe6ee;z-index:2;font-size:12px}td.name{white-space:normal;min-width:180px}tbody tr:hover{background:#20262d}");
   html.push(".good{color:var(--good);font-weight:700}.bad{color:var(--bad);font-weight:700}.flag{color:var(--warn);font-weight:800}.flagrow{background:#302b18}.muted,.tiny{color:var(--muted)}.tiny{font-size:12px}.empty{color:var(--muted);padding:12px 2px}.divider{height:1px;background:var(--line);margin:18px 0}");
   html.push(".search{width:min(420px,100%);background:#101317;color:#fff;border:1px solid #414851;border-radius:7px;padding:9px 11px}.kicker{font-size:12px;color:var(--muted);margin-top:3px}");
-  html.push("@media(max-width:950px){.summary{grid-template-columns:repeat(2,minmax(0,1fr))}.twocol{grid-template-columns:1fr}.wrap{padding:14px}.barrow{grid-template-columns:minmax(90px,1fr) minmax(90px,1.5fr) auto}}");
+  html.push("@media(max-width:950px){.summary{grid-template-columns:repeat(2,minmax(0,1fr))}.twocol{grid-template-columns:1fr}.debuggrid{grid-template-columns:repeat(2,minmax(0,1fr))}.wrap{padding:14px}.barrow{grid-template-columns:minmax(90px,1fr) minmax(90px,1.5fr) auto}}");
   html.push("</style></head><body><div class='wrap'>");
 
   html.push("<div class='hero'><h1>Mall Manager</h1>");
@@ -648,10 +712,13 @@ function renderPage(notice, needsRecentConfirm) {
   }
 
   html.push("<div class='actions'>");
-  html.push("<a class='btn' href='/backoffice.php?which=3&mallmanager_sync=1'>Refresh sales dashboard</a>");
+  html.push("<button type='button' id='syncSalesButton' onclick='syncSales()'>Refresh sales dashboard</button>");
+  html.push("<button type='button' class='secondary' onclick='exportDebugHtml()'>Export debug HTML</button>");
   html.push("<form class='inline' method='post' action='" + SELF + "'><input type='hidden' name='action' value='run'><button type='submit'>Run repricer now</button></form>");
   html.push("<a class='btn secondary' href='/backoffice.php?which=3'>Native store log</a>");
   html.push("<a class='btn secondary' href='/backoffice.php?which=1'>Store inventory</a>");
+  html.push("<span id='syncSalesStatus' class='tiny'></span>");
+  html.push("<iframe id='salesSyncFrame' title='Mall Manager sales capture' style='display:none' data-active='0' onload='salesSyncLoaded()'></iframe>");
   html.push("</div>");
 
   html.push("<div class='section'><div class='sectionhead'><div><h2>Sales overview</h2>");
@@ -666,6 +733,16 @@ function renderPage(notice, needsRecentConfirm) {
   html.push("</div>");
 
   html.push("<div class='tiny'>Current KoL two-week window: " + number(currentStats.totals.units) + " items · " + number(currentStats.totals.buyers) + " buyers · " + number(currentStats.totals.transactions) + " transactions · " + number(currentStats.totals.meat) + " Meat.</div>");
+  html.push("<div class='debuggrid'>");
+  html.push("<div class='debugbox'><b>Last hook</b>" + esc(dateText(lastHookMs)) + "</div>");
+  html.push("<div class='debugbox'><b>Hook page chars</b>" + number(lastHookPageChars) + "</div>");
+  html.push("<div class='debugbox'><b>Hook parsed rows</b>" + number(lastHookParsedCount) + "</div>");
+  html.push("<div class='debugbox'><b>Current CSV parsed rows</b>" + number(currentSales.length) + "</div>");
+  html.push("<div class='debugbox'><b>Current CSV lines</b>" + number(currentRawLines.length) + "</div>");
+  html.push("<div class='debugbox'><b>History parsed rows</b>" + number(historyRows.length) + "</div>");
+  html.push("<div class='debugbox'><b>Looked like Store Log</b>" + esc(lastHookLookedLikeStoreLog || "unknown") + "</div>");
+  html.push("<div class='debugbox'><b>CSV write OK</b>" + esc(lastHookWriteOk || "unknown") + "</div>");
+  html.push("</div>");
   html.push("</div></div>");
 
   html.push("<div class='twocol'>");
@@ -774,8 +851,33 @@ function renderPage(notice, needsRecentConfirm) {
 
   html.push("<div class='tiny'>Sales are captured by relay/backoffice.ash into CSV, then this dashboard reads/merges the local files. No sales scraping is attempted from inside this relay page. Pricegun/network price checks happen only when you explicitly run repricing or mall-clean.</div>");
 
+  html.push("<details class='section debug' id='debugBundle'><summary>Capture diagnostics bundled into Export debug HTML</summary><div class='sectionbody'>");
+  html.push("<p class='tiny'>This bundle is local diagnostic evidence. The backoffice hook redacts pwd/pwdhash values before saving its HTML capture.</p>");
+  html.push("<h3>Runtime properties</h3><pre>" +
+    esc(
+      "lastHook=" + dateText(lastHookMs) + "\n" +
+      "lastHookPageChars=" + lastHookPageChars + "\n" +
+      "lastHookParsedCount=" + lastHookParsedCount + "\n" +
+      "lastHookLookedLikeStoreLog=" + lastHookLookedLikeStoreLog + "\n" +
+      "lastHookWriteOk=" + lastHookWriteOk + "\n" +
+      "lastCapture=" + dateText(lastCaptureMs) + "\n" +
+      "lastCaptureCount=" + lastCaptureCount + "\n" +
+      "currentCsvLineCount=" + currentRawLines.length + "\n" +
+      "currentCsvParsedRows=" + currentSales.length + "\n" +
+      "historyCsvLineCount=" + historyRawLines.length + "\n" +
+      "historyParsedRows=" + historyRows.length
+    ) +
+    "</pre>");
+  html.push("<h3>data/" + esc(SALES_CURRENT_FILE) + "</h3><pre>" + esc(currentRawLines.join("\n")) + "</pre>");
+  html.push("<h3>data/" + esc(SALES_HISTORY_FILE) + " (sample)</h3><pre>" + esc(sampleLines(historyRawLines, 250, 50)) + "</pre>");
+  html.push("<h3>data/" + esc(BACKOFFICE_DEBUG_FILE) + " (sanitized excerpt around first sale)</h3><pre>" + esc(debugHtmlExcerpt(backofficeDebugLines)) + "</pre>");
+  html.push("</div></details>");
+
   html.push("<script>");
   html.push("function filterItems(){var q=(document.getElementById('itemSearch').value||'').toLowerCase();var rows=document.querySelectorAll('#itemDetailTable tbody tr');for(var i=0;i<rows.length;i++){var t=(rows[i].textContent||'').toLowerCase();rows[i].style.display=t.indexOf(q)>=0?'':'none';}}");
+  html.push("function syncSales(){var f=document.getElementById('salesSyncFrame');var b=document.getElementById('syncSalesButton');var s=document.getElementById('syncSalesStatus');if(!f)return;f.dataset.active='1';if(b)b.disabled=true;if(s)s.textContent='Capturing Store Log to CSV…';f.src='/backoffice.php?which=3&mallmanager_sync=1&_mm='+Date.now();}");
+  html.push("function salesSyncLoaded(){var f=document.getElementById('salesSyncFrame');if(!f||f.dataset.active!=='1')return;f.dataset.active='0';var s=document.getElementById('syncSalesStatus');if(s)s.textContent='Capture finished; reloading dashboard…';window.setTimeout(function(){window.location.replace('/relay_store_reprice.js?sync=ok&_mm='+Date.now());},100);}");
+  html.push("function exportDebugHtml(){var d=document.getElementById('debugBundle');if(d)d.open=true;var source='<!doctype html>\\n'+document.documentElement.outerHTML;var blob=new Blob([source],{type:'text/html;charset=utf-8'});var url=URL.createObjectURL(blob);var a=document.createElement('a');a.href=url;a.download='mall-manager-debug-'+new Date().toISOString().replace(/[:.]/g,'-')+'.html';document.body.appendChild(a);a.click();document.body.removeChild(a);window.setTimeout(function(){URL.revokeObjectURL(url);},1000);}");
   html.push("</script>");
 
   html.push("</div></body></html>");
