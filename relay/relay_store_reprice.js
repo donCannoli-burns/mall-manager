@@ -146,44 +146,138 @@ function transactionBaseKey(tx) {
  *
  * 10/16/26 23:20:26 vkkhamul bought 3 (shadow glass) for 16,038 Meat.
  */
+function addParsedSale(found, seenOccurrence, date, time, player, item, quantity, totalMeat) {
+  quantity = parseIntLoose(quantity);
+  totalMeat = parseIntLoose(totalMeat);
+  player = trim(decodeBasicHtml(String(player || "").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " "));
+  item = trim(decodeBasicHtml(String(item || "").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " "));
+
+  if (!player || !item || quantity <= 0 || totalMeat < 0) return;
+
+  var tx = {
+    date: date ? normalizeDate(trim(date)) : "Unknown",
+    time: trim(time || ""),
+    player: player,
+    item: item,
+    quantity: quantity,
+    itemPrice: quantity > 0 ? Math.round(totalMeat / quantity) : 0,
+    totalMeat: totalMeat
+  };
+
+  var base = transactionBaseKey(tx);
+  var occurrence = seenOccurrence[base] || 0;
+  seenOccurrence[base] = occurrence + 1;
+  tx.key = base + "|" + occurrence;
+  found.push(tx);
+}
+
+/*
+ * Parse the actual Store Log tab: /backoffice.php?which=3.
+ *
+ * Important: this deliberately does NOT depend on KoL's section-heading text.
+ * JimmyKing's working relay parser keys off the transaction sentence itself:
+ *
+ *   :SS PLAYER bought QTY (ITEM) for TOTAL
+ *
+ * We follow that proven shape, but also capture date/time when present.
+ */
 function parseBackofficeSales(html) {
+  var raw = String(html || "");
   var text = decodeBasicHtml(
-    String(html)
+    raw
       .replace(/<br\s*\/?>/gi, "\n")
       .replace(/<\/tr>/gi, "\n")
       .replace(/<\/p>/gi, "\n")
       .replace(/<[^>]+>/g, " ")
   );
 
-  text = text.replace(/\s+/g, " ");
+  // Preserve line breaks long enough to avoid accidentally joining unrelated
+  // page text, while still normalizing runs of spaces/tabs.
+  text = text
+    .replace(/[ \t\f\v]+/g, " ")
+    .replace(/\r/g, "");
 
-  var re = /(\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}))\s+(\d{1,2}:\d{2}:\d{2})\s+(.+?)\s+bought\s+([\d,]+)\s+\((.*?)\)\s+for\s+([\d,]+)\s+Meat\./gi;
   var found = [];
   var seenOccurrence = {};
   var m;
 
-  while ((m = re.exec(text)) !== null) {
-    var quantity = parseIntLoose(m[4]);
-    var totalMeat = parseIntLoose(m[6]);
+  /*
+   * Primary parser: date + time + buyer + transaction sentence.
+   * The trailing "Meat." is optional because relay/browser rewrites may move
+   * punctuation or markup around it.
+   */
+  var fullRe = /(\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}))\s+(\d{1,2}:\d{2}:\d{2})\s+(.+?)\s+bought\s+([\d,]+)\s+\((.*?)\)\s+for\s+([\d,]+)(?:\s+Meat)?\.?/gi;
 
-    if (quantity <= 0 || totalMeat < 0) continue;
+  while ((m = fullRe.exec(text)) !== null) {
+    addParsedSale(
+      found,
+      seenOccurrence,
+      m[1],
+      m[2],
+      m[3],
+      m[5],
+      m[4],
+      m[6]
+    );
+  }
 
-    var tx = {
-      date: normalizeDate(trim(m[1])),
-      time: trim(m[2]),
-      player: trim(m[3]),
-      item: trim(m[5]),
-      quantity: quantity,
-      itemPrice: quantity > 0 ? Math.round(totalMeat / quantity) : 0,
-      totalMeat: totalMeat
-    };
+  if (found.length) return found;
 
-    var base = transactionBaseKey(tx);
-    var occurrence = seenOccurrence[base] || 0;
-    seenOccurrence[base] = occurrence + 1;
-    tx.key = base + "|" + occurrence;
+  /*
+   * Fallback: copy JimmyKing's proven idea more literally. Ignore the date and
+   * match from the timestamp colon through "bought". We then recover a nearby
+   * date from the preceding text when possible.
+   */
+  var jimmyRe = /(\d{1,2}:\d{2}:\d{2})\s+(.+?)\s+bought\s+([\d,]+)\s+\((.*?)\)\s+for\s+([\d,]+)(?:\s+Meat)?\.?/gi;
 
-    found.push(tx);
+  while ((m = jimmyRe.exec(text)) !== null) {
+    var before = text.substring(Math.max(0, m.index - 40), m.index);
+    var dateMatch = /(\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}))\s*$/.exec(before);
+
+    addParsedSale(
+      found,
+      seenOccurrence,
+      dateMatch ? dateMatch[1] : "",
+      m[1],
+      m[2],
+      m[4],
+      m[3],
+      m[5]
+    );
+  }
+
+  if (found.length) return found;
+
+  /*
+   * Last-resort chunk parser: this is intentionally very close to
+   * jimmyking9999999/kol-relay-projects/backoffice.ash. It tolerates markup
+   * between fields by parsing each "Meat." chunk independently.
+   */
+  var pieces = raw.split(/Meat\./i);
+  var i;
+
+  for (i = 0; i < pieces.length; i++) {
+    var chunk = decodeBasicHtml(
+      pieces[i]
+        .replace(/<br\s*\/?>/gi, " ")
+        .replace(/<[^>]+>/g, " ")
+    ).replace(/\s+/g, " ");
+
+    var cm = /(\d{1,2}:\d{2}:\d{2})\s+(.+?)\s+bought\s+([\d,]+)\s+\((.*?)\)\s+for\s+([\d,]+)/i.exec(chunk);
+    if (!cm) continue;
+
+    var dm = /(\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}))(?=[^\d]*\d{1,2}:\d{2}:\d{2})/.exec(chunk);
+
+    addParsedSale(
+      found,
+      seenOccurrence,
+      dm ? dm[1] : "",
+      cm[1],
+      cm[2],
+      cm[4],
+      cm[3],
+      cm[5]
+    );
   }
 
   return found;
@@ -196,7 +290,9 @@ function fetchCurrentSales() {
   return {
     html: html,
     rows: rows,
-    recognized: html.indexOf("Recent Store Activity") >= 0 || rows.length > 0
+    pageLength: html.length,
+    containsBought: /\bbought\b/i.test(html),
+    containsMeat: /\bMeat\b/i.test(html)
   };
 }
 
@@ -546,9 +642,15 @@ function renderPage(notice, needsRecentConfirm) {
     salesFetch = fetchCurrentSales();
     currentSales = salesFetch.rows;
 
-    if (!salesFetch.recognized) {
+    if (!currentSales.length) {
       salesError =
-        "KoL's which=3 backoffice page loaded, but the Recent Store Activity section was not recognized.";
+        "KoL Store Log loaded (" +
+        salesFetch.pageLength +
+        " chars), but no sale rows parsed. bought=" +
+        salesFetch.containsBought +
+        ", Meat=" +
+        salesFetch.containsMeat +
+        ". Existing saved history is still shown below.";
     } else {
       var merged = mergeSalesHistory(currentSales);
       historyRows = merged.rows;
