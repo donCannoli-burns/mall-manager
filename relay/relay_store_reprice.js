@@ -715,7 +715,7 @@ function renderPage(notice, needsRecentConfirm) {
           "No Store Log capture exists yet. Use Refresh sales dashboard.";
       } else {
         salesError =
-          "The Store Log capture exists, but the relay parser found 0 transactions. Export debug HTML and send me that file.";
+          "The Store Log capture exists, but the relay parser found 0 transactions. Export HTML and send me that file.";
       }
     }
   } catch (e) {
@@ -776,7 +776,8 @@ function renderPage(notice, needsRecentConfirm) {
 
   html.push("<div class='actions'>");
   html.push("<button type='button' id='syncSalesButton' onclick='syncSales()'>Refresh sales dashboard</button>");
-  html.push("<button type='button' class='secondary' onclick='exportDebugHtml()'>Export debug HTML</button>");
+  html.push("<button type='button' class='secondary' onclick='exportHtml()'>Export HTML</button>");
+  html.push("<button type='button' class='secondary' onclick='exportCsv()'>Export CSV</button>");
   html.push("<form class='inline' method='post'><input type='hidden' name='action' value='run'><button type='submit'>Run repricer now</button></form>");
   html.push("<a class='btn secondary' href='/backoffice.php?which=3'>Native store log</a>");
   html.push("<a class='btn secondary' href='/backoffice.php?which=1'>Store inventory</a>");
@@ -915,7 +916,7 @@ function renderPage(notice, needsRecentConfirm) {
 
   html.push("<div class='tiny'>Sales are captured by relay/backoffice.ash as sanitized HTML; this relay parses that capture into CSV, then reads/merges the local files. No sales scraping is attempted from inside this relay page. Pricegun/network price checks happen only when you explicitly run repricing or mall-clean.</div>");
 
-  html.push("<details class='section debug' id='debugBundle'><summary>Capture diagnostics bundled into Export debug HTML</summary><div class='sectionbody'>");
+  html.push("<details class='section debug' id='debugBundle'><summary>Capture diagnostics</summary><div class='sectionbody'>");
   html.push("<p class='tiny'>This bundle is local diagnostic evidence. The backoffice hook redacts pwd/pwdhash values before saving its HTML capture.</p>");
   html.push("<h3>Runtime properties</h3><pre>" +
     esc(
@@ -938,11 +939,15 @@ function renderPage(notice, needsRecentConfirm) {
   html.push("<h3>data/" + esc(BACKOFFICE_DEBUG_FILE) + " (sanitized excerpt around first sale)</h3><pre>" + esc(debugHtmlExcerpt(backofficeDebugLines)) + "</pre>");
   html.push("</div></details>");
 
+  html.push("<textarea id='salesCsvExportData' style='display:none' aria-hidden='true'>" + esc(historyRawLines.join("\n")) + "</textarea>");
+
   html.push("<script>");
   html.push("function filterItems(){var q=(document.getElementById('itemSearch').value||'').toLowerCase();var rows=document.querySelectorAll('#itemDetailTable tbody tr');for(var i=0;i<rows.length;i++){var t=(rows[i].textContent||'').toLowerCase();rows[i].style.display=t.indexOf(q)>=0?'':'none';}}");
   html.push("function syncSales(){var f=document.getElementById('salesSyncFrame');var b=document.getElementById('syncSalesButton');var s=document.getElementById('syncSalesStatus');if(!f)return;f.dataset.active='1';if(b)b.disabled=true;if(s)s.textContent='Capturing Store Log to CSV…';f.src='/backoffice.php?which=3&mallmanager_sync=1&_mm='+Date.now();}");
   html.push("function salesSyncLoaded(){var f=document.getElementById('salesSyncFrame');if(!f||f.dataset.active!=='1')return;f.dataset.active='0';var s=document.getElementById('syncSalesStatus');if(s)s.textContent='Capture finished; reloading dashboard…';window.setTimeout(function(){window.location.reload();},100);}");
-  html.push("function exportDebugHtml(){var d=document.getElementById('debugBundle');if(d)d.open=true;var source='<!doctype html>\\n'+document.documentElement.outerHTML;var blob=new Blob([source],{type:'text/html;charset=utf-8'});var url=URL.createObjectURL(blob);var a=document.createElement('a');a.href=url;a.download='mall-manager-debug-'+new Date().toISOString().replace(/[:.]/g,'-')+'.html';document.body.appendChild(a);a.click();document.body.removeChild(a);window.setTimeout(function(){URL.revokeObjectURL(url);},1000);}");
+  html.push("function downloadBlob(text,type,name){var blob=new Blob([text],{type:type});var url=URL.createObjectURL(blob);var a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();document.body.removeChild(a);window.setTimeout(function(){URL.revokeObjectURL(url);},1000);}");
+  html.push("function exportHtml(){var source='<!doctype html>\\n'+document.documentElement.outerHTML;downloadBlob(source,'text/html;charset=utf-8','mall-manager-'+new Date().toISOString().replace(/[:.]/g,'-')+'.html');}");
+  html.push("function exportCsv(){var el=document.getElementById('salesCsvExportData');var csv=el?el.value:'';if(!csv){alert('No sales history is available to export yet.');return;}if(csv.charAt(csv.length-1)!=='\\n')csv+='\\n';downloadBlob(csv,'text/csv;charset=utf-8','mall-manager-sales-'+new Date().toISOString().replace(/[:.]/g,'-')+'.csv');}");
   html.push("</script>");
 
   html.push("</div></body></html>");
