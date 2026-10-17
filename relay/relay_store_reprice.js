@@ -284,7 +284,7 @@ function parseBackofficeSales(html) {
 }
 
 function fetchCurrentSales() {
-  var html = String(k.visitUrl(SALES_URL));
+  var html = String(k.visitUrl(SALES_URL, false));
   var rows = parseBackofficeSales(html);
 
   return {
