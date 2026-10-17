@@ -101,27 +101,42 @@ Meaning:
 
 ### Sales source and refresh
 
-Sales come from KoL's actual Store Log page:
+Sales originate from KoL's actual Store Log page:
 
 ```text
 backoffice.php?which=3
 ```
 
-The **Refresh sales dashboard** button uses an absolute relay-script URL plus a cache-busting nonce, then reparses the Store Log on every refresh.
+Mall Manager does **not** scrape that page from inside the dashboard relay. Instead, `relay/backoffice.ash` is a small pass-through capture hook. KoLmafia's no-argument `visit_url()` retrieves the real native backoffice response, the hook parses the Store Log, writes a CSV snapshot, and then returns the native page unchanged.
 
-The parser follows KoL's longstanding transaction format:
-
-```text
-MM/DD/YY HH:MM:SS Player bought QTY (Item) for TOTAL Meat.
-```
-
-Each refresh merges newly observed transactions into:
+The **Refresh sales dashboard** button visits:
 
 ```text
-data/mall-manager-sales.tsv
+/backoffice.php?which=3&mallmanager_sync=1
 ```
 
-Transactions are deduplicated using date/time/player/item/quantity/total plus an occurrence index, so the dashboard can accumulate history beyond KoL's rolling two-week Store Log.
+The capture hook writes:
+
+```text
+data/mall-manager-sales-current.csv
+```
+
+and redirects back to Mall Manager. The dashboard then merges/deduplicates that snapshot into the durable ledger:
+
+```text
+data/mall-manager-sales.csv
+```
+
+Both CSVs use the analyzer-friendly schema:
+
+```csv
+"Date","Time","Player","Item","Quantity","Item Price","Total Meat"
+"10/16/26","23:20:26","vkkhamul","shadow glass",3,5346,16038
+```
+
+This also makes existing exports easy to import: place a compatible CSV at `data/mall-manager-sales.csv` and the dashboard will use it as historical seed data.
+
+Transactions are deduplicated by normalized date/time/player/item/quantity/total plus occurrence count, so legitimate duplicate-looking transactions in the same second are preserved while repeated Store Log captures are not re-added.
 
 ### Sales analytics
 
@@ -212,6 +227,7 @@ The audit records mall minimum, cleanup threshold, current market price, Pricegu
 scripts/store-reprice.js
 scripts/mall-clean.js
 relay/relay_store_reprice.js
+relay/backoffice.ash
 ```
 
 ## Existing log migration
