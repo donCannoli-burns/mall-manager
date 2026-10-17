@@ -619,7 +619,7 @@ function renderExplodedPie(title, rows, valueKey, centerLabel) {
 
   var html = [];
   html.push("<div class='piecard'>");
-  html.push("<div class='pieheading'>" + esc(title) + "</div>");
+  if (title) html.push("<div class='pieheading'>" + esc(title) + "</div>");
 
   if (!series.length || total <= 0) {
     html.push("<div class='empty'>No chart data.</div></div>");
@@ -927,7 +927,7 @@ function renderPage(notice, needsRecentConfirm) {
   html.push(".tablewrap{overflow:auto;max-height:520px;border:1px solid #30363d;border-radius:7px}.tablewrap.compact{max-height:350px;margin-top:14px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #2b3138;white-space:nowrap;font-variant-numeric:tabular-nums}th{position:sticky;top:0;background:#252a31;color:#dfe6ee;z-index:2;font-size:12px}td.name{white-space:normal;min-width:180px}tbody tr:hover{background:#20262d}");
   html.push(".good{color:var(--good);font-weight:700}.bad{color:var(--bad);font-weight:700}.flag{color:var(--warn);font-weight:800}.flagrow{background:#302b18}.muted,.tiny{color:var(--muted)}.tiny{font-size:12px}.empty{color:var(--muted);padding:12px 2px}.divider{height:1px;background:var(--line);margin:18px 0}");
   html.push(".search{width:min(420px,100%);background:#101317;color:#fff;border:1px solid #414851;border-radius:7px;padding:9px 11px}.kicker{font-size:12px;color:var(--muted);margin-top:3px}");
-  html.push(".piegrid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:18px 0}.piecard{background:linear-gradient(180deg,#20242a,#181c21);border:1px solid #343b44;border-radius:12px;padding:16px;box-shadow:0 12px 32px rgba(0,0,0,.16)}.pieheading{font-size:15px;font-weight:800;margin-bottom:10px}.piebody{display:grid;grid-template-columns:minmax(260px,320px) minmax(0,1fr);gap:14px;align-items:center}.piewrap{min-width:0}.explodedpie{display:block;width:100%;max-width:300px;margin:0 auto;overflow:visible}.piebasehalo{fill:#9bd621;opacity:.16;filter:drop-shadow(0 0 18px rgba(155,214,33,.34))}.piebase{fill:#95d11e;stroke:#b7ea45;stroke-width:1.5}.piecenter{fill:#9bd621;stroke:#b9eb50;stroke-width:1.5;filter:drop-shadow(0 3px 7px rgba(0,0,0,.22))}.piecentervalue{fill:#13200c;font-size:19px;font-weight:900}.piecenterlabel{fill:#304615;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.08em}.pieslice{cursor:pointer;filter:drop-shadow(0 5px 6px rgba(0,0,0,.22));transition:filter .15s ease}.pieslice path{stroke:#efe8e5;stroke-width:1.4;stroke-linejoin:round;transition:fill .15s ease,stroke-width .15s ease}.pieslice:hover path,.pieslice:focus path,.pieslice.pinned path{stroke:#fff;stroke-width:2.4}.pieslice:hover,.pieslice:focus,.pieslice.pinned{filter:drop-shadow(0 8px 9px rgba(0,0,0,.38))}.pielegend{display:flex;flex-direction:column;gap:6px;min-width:0}.pielegendrow{display:grid;grid-template-columns:12px minmax(0,1fr) auto auto;gap:8px;align-items:center;padding:6px 8px;border:1px solid #2f3740;border-radius:8px;background:#11161b}.pielegenddot{width:12px;height:12px;border-radius:50%;box-shadow:0 0 8px rgba(255,255,255,.09)}.pielegendlabel{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pielegendvalue{font-weight:800;font-variant-numeric:tabular-nums}.pielegendpct{color:var(--muted);font-variant-numeric:tabular-nums;min-width:48px;text-align:right}.pietooltip{position:fixed;z-index:9999;pointer-events:none;display:none;min-width:170px;max-width:280px;padding:10px 12px;border-radius:9px;background:rgba(12,16,20,.96);border:1px solid #4a5562;box-shadow:0 14px 34px rgba(0,0,0,.4);color:#f4f4f4}.pietooltip b{display:block;margin-bottom:4px}.pietooltip .tiny{display:block}");
+  html.push(".piegrid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:18px 0}.piecard{background:linear-gradient(180deg,#1a1f24,#15191e);border:1px solid #303841;border-radius:10px;padding:14px;margin:0 0 16px;box-shadow:0 10px 26px rgba(0,0,0,.14)}.pieheading{font-size:15px;font-weight:800;margin-bottom:10px}.piebody{display:grid;grid-template-columns:minmax(260px,320px) minmax(0,1fr);gap:14px;align-items:center}.piewrap{min-width:0}.explodedpie{display:block;width:100%;max-width:300px;margin:0 auto;overflow:visible}.piebasehalo{fill:#9bd621;opacity:.16;filter:drop-shadow(0 0 18px rgba(155,214,33,.34))}.piebase{fill:#95d11e;stroke:#b7ea45;stroke-width:1.5}.piecenter{fill:#10151a;stroke:#b9eb50;stroke-width:3;filter:drop-shadow(0 3px 9px rgba(0,0,0,.4))}.piecentervalue{fill:#ffffff!important;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;font-size:19px;font-weight:900}.piecenterlabel{fill:#c9ff70!important;color:#c9ff70!important;-webkit-text-fill-color:#c9ff70!important;font-size:9px;font-weight:900;text-transform:uppercase;letter-spacing:.08em}.pieslice{cursor:pointer;filter:drop-shadow(0 5px 6px rgba(0,0,0,.22));transition:filter .15s ease}.pieslice path{stroke:#efe8e5;stroke-width:1.4;stroke-linejoin:round;transition:fill .15s ease,stroke-width .15s ease}.pieslice:hover path,.pieslice:focus path,.pieslice.pinned path{stroke:#fff;stroke-width:2.4}.pieslice:hover,.pieslice:focus,.pieslice.pinned{filter:drop-shadow(0 8px 9px rgba(0,0,0,.38))}.pielegend{display:flex;flex-direction:column;gap:6px;min-width:0}.pielegendrow{display:grid;grid-template-columns:12px minmax(0,1fr) auto auto;gap:8px;align-items:center;padding:6px 8px;border:1px solid #2f3740;border-radius:8px;background:#11161b}.pielegenddot{width:12px;height:12px;border-radius:50%;box-shadow:0 0 8px rgba(255,255,255,.09)}.pielegendlabel{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pielegendvalue{font-weight:800;font-variant-numeric:tabular-nums}.pielegendpct{color:var(--muted);font-variant-numeric:tabular-nums;min-width:48px;text-align:right}.pietooltip{position:fixed;z-index:9999;pointer-events:none;display:none;min-width:170px;max-width:280px;padding:10px 12px;border-radius:9px;background:rgba(12,16,20,.96);border:1px solid #4a5562;box-shadow:0 14px 34px rgba(0,0,0,.4);color:#f4f4f4}.pietooltip b{display:block;margin-bottom:4px}.pietooltip .tiny{display:block}");
 
   html.push("@media(max-width:1100px){.piebody{grid-template-columns:1fr}.pielegend{display:grid;grid-template-columns:1fr 1fr}}");
   html.push("@media(max-width:950px){.summary{grid-template-columns:repeat(2,minmax(0,1fr))}.twocol,.piegrid{grid-template-columns:1fr}.debuggrid{grid-template-columns:repeat(2,minmax(0,1fr))}.wrap{padding:14px}.barrow{grid-template-columns:minmax(90px,1fr) minmax(90px,1.5fr) auto}}");
@@ -983,36 +983,33 @@ function renderPage(notice, needsRecentConfirm) {
   html.push("</div>");
   html.push("</div></div>");
 
-  html.push("<div class='section'><div class='sectionhead'><div><h2>Sales distribution</h2><div class='kicker'>Exploded SVG pies — hover to inspect, click a slice to pin it.</div></div></div><div class='sectionbody'>");
-  html.push("<div class='piegrid'>");
-  html.push(renderExplodedPie("Top Buyers by Items Purchased", historyStats.buyers, "units", "items"));
-  html.push(renderExplodedPie("Top Items Sold", historyStats.items, "units", "items"));
-  html.push(renderExplodedPie("Top Buyers by Meat", historyBuyersByMeat, "meat", "Meat"));
-  html.push(renderExplodedPie("Top Items by Meat", historyItemsByMeat, "meat", "Meat"));
-  html.push("</div></div></div>");
   html.push("<div id='pieTooltip' class='pietooltip'></div>");
 
   html.push("<div class='twocol'>");
 
   html.push("<div class='panel'><h3>Top Buyers By Items Purchased</h3>");
+  html.push(renderExplodedPie("", historyStats.buyers, "units", "items purchased"));
   html.push(barRows(historyStats.buyers, "units", 10, false));
   html.push("<div class='charttitle' style='margin-top:18px'>All Buyers By Items Purchased</div>");
   html.push(buyerTable(historyStats.buyers, "units"));
   html.push("</div>");
 
   html.push("<div class='panel'><h3>Top Items Sold</h3>");
+  html.push(renderExplodedPie("", historyStats.items, "units", "items sold"));
   html.push(barRows(historyStats.items, "units", 10, false));
   html.push("<div class='charttitle' style='margin-top:18px'>All Items Sold</div>");
   html.push(itemSummaryTable(historyStats.items, "units"));
   html.push("</div>");
 
   html.push("<div class='panel'><h3>Top Buyers By Meat</h3>");
+  html.push(renderExplodedPie("", historyBuyersByMeat, "meat", "Meat"));
   html.push(barRows(historyBuyersByMeat, "meat", 10, true));
   html.push("<div class='charttitle' style='margin-top:18px'>All Buyers By Meat</div>");
   html.push(buyerTable(historyBuyersByMeat, "meat"));
   html.push("</div>");
 
   html.push("<div class='panel'><h3>Top Items By Meat</h3>");
+  html.push(renderExplodedPie("", historyItemsByMeat, "meat", "Meat"));
   html.push(barRows(historyItemsByMeat, "meat", 10, true));
   html.push("<div class='charttitle' style='margin-top:18px'>All Items By Meat</div>");
   html.push(itemSummaryTable(historyItemsByMeat, "meat"));
