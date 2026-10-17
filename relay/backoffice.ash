@@ -47,23 +47,15 @@ string sanitize_debug_html(string value) {
 	value = replace_all(create_matcher("pwdhash=[^&\\\"' <>]*", value), "pwdhash=REDACTED");
 
 	// KoL also embeds the session password hash in page JavaScript.
+	// Match the whole assignment through its semicolon so replacement strings
+	// do not depend on quote-escape behavior in older ASH runtimes.
 	value = replace_all(
-		create_matcher("var\\s+pwd\\s*=\\s*\\\"[^\\\"]*\\\"", value),
-		"var pwd = \\"REDACTED\\\""
+		create_matcher("var\\s+pwd\\s*=\\s*[^;]+;", value),
+		"var pwd = 'REDACTED';"
 	);
 	value = replace_all(
-		create_matcher("var\\s+pwd\\s*=\\s*'[^']*'", value),
-		"var pwd = 'REDACTED'"
-	);
-
-	// Redact common hidden-input forms too.
-	value = replace_all(
-		create_matcher("name=\\\"pwd\\\"[^>]*value=\\\"[^\\\"]*\\\"", value),
-		"name=\\\"pwd\\\" value=\\\"REDACTED\\\""
-	);
-	value = replace_all(
-		create_matcher("name='pwd'[^>]*value='[^']*'", value),
-		"name='pwd' value='REDACTED'"
+		create_matcher("var\\s+pwdhash\\s*=\\s*[^;]+;", value),
+		"var pwdhash = 'REDACTED';"
 	);
 
 	return value;
