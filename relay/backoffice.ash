@@ -45,6 +45,27 @@ int comma_int(string value) {
 string sanitize_debug_html(string value) {
 	value = replace_all(create_matcher("pwd=[^&\\\"' <>]*", value), "pwd=REDACTED");
 	value = replace_all(create_matcher("pwdhash=[^&\\\"' <>]*", value), "pwdhash=REDACTED");
+
+	// KoL also embeds the session password hash in page JavaScript.
+	value = replace_all(
+		create_matcher("var\\s+pwd\\s*=\\s*\\\"[^\\\"]*\\\"", value),
+		"var pwd = \\"REDACTED\\\""
+	);
+	value = replace_all(
+		create_matcher("var\\s+pwd\\s*=\\s*'[^']*'", value),
+		"var pwd = 'REDACTED'"
+	);
+
+	// Redact common hidden-input forms too.
+	value = replace_all(
+		create_matcher("name=\\\"pwd\\\"[^>]*value=\\\"[^\\\"]*\\\"", value),
+		"name=\\\"pwd\\\" value=\\\"REDACTED\\\""
+	);
+	value = replace_all(
+		create_matcher("name='pwd'[^>]*value='[^']*'", value),
+		"name='pwd' value='REDACTED'"
+	);
+
 	return value;
 }
 
@@ -56,71 +77,59 @@ boolean write_debug_html(buffer page) {
 
 mall_sale[int] parse_store_log(buffer page) {
 	mall_sale[int] sales;
+
+	/*
+	 * Keep the transaction matcher deliberately close to JimmyKing's proven
+	 * backoffice.ash parser:
+	 *
+	 *   :\d+ (.+) bought (\d+) \((.*?)\) for (\d+)
+	 *
+	 * Match against the raw Meat.-delimited chunk first, then strip markup
+	 * from the captured player/item fields. This avoids relying on the more
+	 * elaborate date-first/whitespace regex which proved incompatible in the
+	 * user's KoLmafia ASH runtime.
+	 */
 	string[int] chunks = split_string(page.to_string(), "Meat.");
 
 	foreach i, raw in chunks {
-		string text = normalize_space(strip_tags(raw));
-
-		matcher m = create_matcher(
-			"(\\d{1,2}/\\d{1,2}/(?:\\d{2}|\\d{4}))\\s+" +
-			"(\\d{1,2}:\\d{2}:\\d{2})\\s+" +
-			"(.+?)\\s+bought\\s+" +
-			"([\\d,]+)\\s+\\((.*?)\\)\\s+for\\s+([\\d,]+)",
-			text
+		matcher sale_matcher = create_matcher(
+			":\\d+ (.+) bought ([\\d,]+) \\((.*?)\\) for ([\\d,]+)",
+			raw
 		);
 
-		string sale_date;
-		string sale_time;
-		string sale_player;
-		string sale_item;
-		string sale_quantity;
-		string sale_total;
-
-		if (m.find()) {
-			sale_date = m.group(1);
-			sale_time = m.group(2);
-			sale_player = m.group(3);
-			sale_quantity = m.group(4);
-			sale_item = m.group(5);
-			sale_total = m.group(6);
-		} else {
-			// JimmyKing-style fallback: anchor on the timestamp and sale sentence.
-			matcher fallback = create_matcher(
-				"(\\d{1,2}:\\d{2}:\\d{2})\\s+" +
-				"(.+?)\\s+bought\\s+" +
-				"([\\d,]+)\\s+\\((.*?)\\)\\s+for\\s+([\\d,]+)",
-				text
-			);
-
-			if (!fallback.find()) {
-				continue;
-			}
-
-			matcher date_match = create_matcher(
-				"(\\d{1,2}/\\d{1,2}/(?:\\d{2}|\\d{4}))",
-				text
-			);
-
-			sale_date = date_match.find() ? date_match.group(1) : "";
-			sale_time = fallback.group(1);
-			sale_player = fallback.group(2);
-			sale_quantity = fallback.group(3);
-			sale_item = fallback.group(4);
-			sale_total = fallback.group(5);
+		if (!sale_matcher.find()) {
+			continue;
 		}
 
-		int quantity = comma_int(sale_quantity);
-		int total_meat = comma_int(sale_total);
+		string player = normalize_space(strip_tags(sale_matcher.group(1)));
+		string item_name = normalize_space(strip_tags(sale_matcher.group(3)));
+		int quantity = comma_int(sale_matcher.group(2));
+		int total_meat = comma_int(sale_matcher.group(4));
 
-		if (quantity <= 0 || total_meat < 0) {
+		if (player == "" || item_name == "" || quantity <= 0 || total_meat < 0) {
 			continue;
+		}
+
+		string sale_date = "";
+		string sale_time = "";
+
+		// Date/time are metadata only; a timestamp-parser failure must never
+		// discard an otherwise valid sale transaction.
+		matcher stamp_matcher = create_matcher(
+			"(\\d+/\\d+/\\d+) (\\d+:\\d+:\\d+)",
+			raw
+		);
+
+		if (stamp_matcher.find()) {
+			sale_date = stamp_matcher.group(1);
+			sale_time = stamp_matcher.group(2);
 		}
 
 		int n = count(sales);
 		sales[n].date = sale_date;
 		sales[n].time = sale_time;
-		sales[n].player = normalize_space(sale_player);
-		sales[n].item_name = normalize_space(sale_item);
+		sales[n].player = player;
+		sales[n].item_name = item_name;
 		sales[n].quantity = quantity;
 		sales[n].item_price = total_meat / quantity;
 		sales[n].total_meat = total_meat;
