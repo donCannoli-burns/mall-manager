@@ -31,13 +31,49 @@ Update later with:
 git update mall-manager
 ```
 
-Run from gCLI:
+Run from gCLI through the Mall Manager command:
+
+```text
+mall-manager help
+mall-manager reprice
+mall-manager sim reprice
+mall-manager clean
+mall-manager sim clean
+```
+
+KoLmafia falls back to script lookup for unknown gCLI commands, so `scripts/mall-manager.js` can be invoked directly as `mall-manager ...` without typing `call`.
+
+The underlying scripts remain available for compatibility:
 
 ```text
 call store-reprice.js
+call store-reprice.js sim
+call mall-clean.js
+call mall-clean.js preview
 ```
 
 Or choose the Mall Manager relay entry from the relay-browser script dropdown.
+
+## gCLI command surface
+
+`mall-manager help` prints the supported command surface:
+
+```text
+mall-manager reprice
+mall-manager sim reprice
+mall-manager clean
+mall-manager sim clean
+mall-manager force reprice
+mall-manager force clean
+mall-manager help
+```
+
+Simulation word order is flexible, so `mall-manager reprice sim` and `mall-manager clean sim` are also accepted.
+
+- **sim reprice** performs the same mall-price refresh and Pricegun safety analysis as a live repricing run, prints every proposed price change, and stops before any store mutation, repricing audit write, or 24-hour completion state is recorded.
+- **sim clean** uses Mall Clean's existing preview mode and never removes/autosells items.
+- **force reprice** bypasses only the repricer's 24-hour rerun guard; mall/Pricegun safeguards remain active.
+- **force clean** bypasses only Mall Clean's 24-hour rerun guard; the final destructive confirmation remains required.
 
 ## Request throttling
 
