@@ -17,8 +17,8 @@ var k = require("kolmafia");
 var repricer = require("../scripts/store-reprice.js");
 
 var SELF = "/relay_store_reprice.js";
-var SALES_URL = "backoffice.php?which=3";
-var SALES_HISTORY_FILE = "mall-manager-sales.tsv";
+var SALES_CURRENT_FILE = "mall-manager-sales-current.csv";
+var SALES_HISTORY_FILE = "mall-manager-sales.csv";
 var SALES_HISTORY_MAX_ROWS = 100000;
 
 function esc(value) {
@@ -129,7 +129,7 @@ function monthKey(date) {
 
 function transactionBaseKey(tx) {
   return [
-    tx.date,
+    normalizeDate(tx.date),
     tx.time,
     tx.player,
     tx.item,
@@ -138,217 +138,149 @@ function transactionBaseKey(tx) {
   ].join("|");
 }
 
-/*
- * Parse the actual Store Log tab: /backoffice.php?which=3.
- *
- * We strip markup first because player/item names are linked in the native page.
- * The resulting text matches the longstanding KoL format, e.g.
- *
- * 10/16/26 23:20:26 vkkhamul bought 3 (shadow glass) for 16,038 Meat.
- */
-function addParsedSale(found, seenOccurrence, date, time, player, item, quantity, totalMeat) {
-  quantity = parseIntLoose(quantity);
-  totalMeat = parseIntLoose(totalMeat);
-  player = trim(decodeBasicHtml(String(player || "").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " "));
-  item = trim(decodeBasicHtml(String(item || "").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " "));
-
-  if (!player || !item || quantity <= 0 || totalMeat < 0) return;
-
-  var tx = {
-    date: date ? normalizeDate(trim(date)) : "Unknown",
-    time: trim(time || ""),
-    player: player,
-    item: item,
-    quantity: quantity,
-    itemPrice: quantity > 0 ? Math.round(totalMeat / quantity) : 0,
-    totalMeat: totalMeat
-  };
-
-  var base = transactionBaseKey(tx);
-  var occurrence = seenOccurrence[base] || 0;
-  seenOccurrence[base] = occurrence + 1;
-  tx.key = base + "|" + occurrence;
-  found.push(tx);
-}
-
-/*
- * Parse the actual Store Log tab: /backoffice.php?which=3.
- *
- * Important: this deliberately does NOT depend on KoL's section-heading text.
- * JimmyKing's working relay parser keys off the transaction sentence itself:
- *
- *   :SS PLAYER bought QTY (ITEM) for TOTAL
- *
- * We follow that proven shape, but also capture date/time when present.
- */
-function parseBackofficeSales(html) {
-  var raw = String(html || "");
-  var text = decodeBasicHtml(
-    raw
-      .replace(/<br\s*\/?>/gi, "\n")
-      .replace(/<\/tr>/gi, "\n")
-      .replace(/<\/p>/gi, "\n")
-      .replace(/<[^>]+>/g, " ")
-  );
-
-  // Preserve line breaks long enough to avoid accidentally joining unrelated
-  // page text, while still normalizing runs of spaces/tabs.
-  text = text
-    .replace(/[ \t\f\v]+/g, " ")
-    .replace(/\r/g, "");
-
-  var found = [];
-  var seenOccurrence = {};
-  var m;
-
-  /*
-   * Primary parser: date + time + buyer + transaction sentence.
-   * The trailing "Meat." is optional because relay/browser rewrites may move
-   * punctuation or markup around it.
-   */
-  var fullRe = /(\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}))\s+(\d{1,2}:\d{2}:\d{2})\s+(.+?)\s+bought\s+([\d,]+)\s+\((.*?)\)\s+for\s+([\d,]+)(?:\s+Meat)?\.?/gi;
-
-  while ((m = fullRe.exec(text)) !== null) {
-    addParsedSale(
-      found,
-      seenOccurrence,
-      m[1],
-      m[2],
-      m[3],
-      m[5],
-      m[4],
-      m[6]
-    );
-  }
-
-  if (found.length) return found;
-
-  /*
-   * Fallback: copy JimmyKing's proven idea more literally. Ignore the date and
-   * match from the timestamp colon through "bought". We then recover a nearby
-   * date from the preceding text when possible.
-   */
-  var jimmyRe = /(\d{1,2}:\d{2}:\d{2})\s+(.+?)\s+bought\s+([\d,]+)\s+\((.*?)\)\s+for\s+([\d,]+)(?:\s+Meat)?\.?/gi;
-
-  while ((m = jimmyRe.exec(text)) !== null) {
-    var before = text.substring(Math.max(0, m.index - 40), m.index);
-    var dateMatch = /(\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}))\s*$/.exec(before);
-
-    addParsedSale(
-      found,
-      seenOccurrence,
-      dateMatch ? dateMatch[1] : "",
-      m[1],
-      m[2],
-      m[4],
-      m[3],
-      m[5]
-    );
-  }
-
-  if (found.length) return found;
-
-  /*
-   * Last-resort chunk parser: this is intentionally very close to
-   * jimmyking9999999/kol-relay-projects/backoffice.ash. It tolerates markup
-   * between fields by parsing each "Meat." chunk independently.
-   */
-  var pieces = raw.split(/Meat\./i);
+function parseCsvLine(line) {
+  var fields = [];
+  var field = "";
+  var quoted = false;
   var i;
 
-  for (i = 0; i < pieces.length; i++) {
-    var chunk = decodeBasicHtml(
-      pieces[i]
-        .replace(/<br\s*\/?>/gi, " ")
-        .replace(/<[^>]+>/g, " ")
-    ).replace(/\s+/g, " ");
+  for (i = 0; i < line.length; i++) {
+    var ch = line.charAt(i);
 
-    var cm = /(\d{1,2}:\d{2}:\d{2})\s+(.+?)\s+bought\s+([\d,]+)\s+\((.*?)\)\s+for\s+([\d,]+)/i.exec(chunk);
-    if (!cm) continue;
+    if (quoted) {
+      if (ch === '"') {
+        if (i + 1 < line.length && line.charAt(i + 1) === '"') {
+          field += '"';
+          i++;
+        } else {
+          quoted = false;
+        }
+      } else {
+        field += ch;
+      }
+      continue;
+    }
 
-    var dm = /(\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}))(?=[^\d]*\d{1,2}:\d{2}:\d{2})/.exec(chunk);
-
-    addParsedSale(
-      found,
-      seenOccurrence,
-      dm ? dm[1] : "",
-      cm[1],
-      cm[2],
-      cm[4],
-      cm[3],
-      cm[5]
-    );
+    if (ch === '"') {
+      quoted = true;
+    } else if (ch === ",") {
+      fields.push(field);
+      field = "";
+    } else {
+      field += ch;
+    }
   }
 
-  return found;
+  fields.push(field);
+  return fields;
 }
 
-function fetchCurrentSales() {
-  var html = String(k.visitUrl(SALES_URL, false));
-  var rows = parseBackofficeSales(html);
-
-  return {
-    html: html,
-    rows: rows,
-    pageLength: html.length,
-    containsBought: /\bbought\b/i.test(html),
-    containsMeat: /\bMeat\b/i.test(html)
-  };
+function csvEscape(value) {
+  return '"' + String(value === undefined || value === null ? "" : value)
+    .replace(/"/g, '""') + '"';
 }
 
-function historyRow(tx) {
+function salesCsvRow(tx) {
   return [
-    cleanField(tx.key),
-    cleanField(tx.date),
-    cleanField(tx.time),
-    cleanField(tx.player),
-    cleanField(tx.item),
-    tx.quantity,
-    tx.itemPrice,
-    tx.totalMeat
-  ].join("\t");
+    csvEscape(tx.date),
+    csvEscape(tx.time),
+    csvEscape(tx.player),
+    csvEscape(tx.item),
+    Math.round(Number(tx.quantity) || 0),
+    Math.round(Number(tx.itemPrice) || 0),
+    Math.round(Number(tx.totalMeat) || 0)
+  ].join(",");
 }
 
-function readSalesHistory() {
-  var lines = numericLines(k.fileToArray(SALES_HISTORY_FILE));
+function readSalesCsv(filename) {
+  var lines = numericLines(k.fileToArray(filename));
   var rows = [];
   var i;
 
   for (i = 0; i < lines.length; i++) {
-    var line = lines[i];
-    if (!line || line.indexOf("key\tdate\ttime\t") === 0) continue;
+    var line = String(lines[i] || "");
+    if (!line) continue;
 
-    var p = line.split("\t");
-    if (p.length < 8) continue;
+    var p = parseCsvLine(line);
+
+    if (
+      i === 0 &&
+      p.length >= 7 &&
+      trim(p[0]).toLowerCase() === "date" &&
+      trim(p[3]).toLowerCase() === "item"
+    ) {
+      continue;
+    }
+
+    if (p.length < 7) continue;
+
+    var quantity = parseIntLoose(p[4]);
+    var itemPrice = parseIntLoose(p[5]);
+    var totalMeat = parseIntLoose(p[6]);
+
+    if (!p[0] || !p[2] || !p[3] || quantity <= 0 || totalMeat < 0) {
+      continue;
+    }
 
     rows.push({
-      key: p[0],
-      date: p[1],
-      time: p[2],
-      player: p[3],
-      item: p[4],
-      quantity: Number(p[5]) || 0,
-      itemPrice: Number(p[6]) || 0,
-      totalMeat: Number(p[7]) || 0
+      date: trim(p[0]),
+      time: trim(p[1]),
+      player: decodeBasicHtml(trim(p[2])),
+      item: decodeBasicHtml(trim(p[3])),
+      quantity: quantity,
+      itemPrice: itemPrice,
+      totalMeat: totalMeat
     });
   }
 
   return rows;
 }
 
-function mergeSalesHistory(currentRows) {
-  var history = readSalesHistory();
-  var known = {};
+function writeSalesCsv(filename, rows) {
+  var lines = [
+    '"Date","Time","Player","Item","Quantity","Item Price","Total Meat"'
+  ];
   var i;
 
-  for (i = 0; i < history.length; i++) known[history[i].key] = true;
+  for (i = 0; i < rows.length; i++) {
+    lines.push(salesCsvRow(rows[i]));
+  }
+
+  return k.bufferToFile(lines.join("\n") + "\n", filename);
+}
+
+function readCurrentSales() {
+  return readSalesCsv(SALES_CURRENT_FILE);
+}
+
+function readSalesHistory() {
+  return readSalesCsv(SALES_HISTORY_FILE);
+}
+
+function mergeSalesHistory(currentRows) {
+  var history = readSalesHistory();
+  var historyCounts = {};
+  var currentSeen = {};
+  var i;
+
+  for (i = 0; i < history.length; i++) {
+    var hb = transactionBaseKey(history[i]);
+    historyCounts[hb] = (historyCounts[hb] || 0) + 1;
+  }
 
   var added = 0;
 
   for (i = 0; i < currentRows.length; i++) {
-    if (known[currentRows[i].key]) continue;
+    var base = transactionBaseKey(currentRows[i]);
+    var occurrence = currentSeen[base] || 0;
+    currentSeen[base] = occurrence + 1;
+
+    if (occurrence < (historyCounts[base] || 0)) {
+      continue;
+    }
+
     history.push(currentRows[i]);
-    known[currentRows[i].key] = true;
+    historyCounts[base] = (historyCounts[base] || 0) + 1;
     added++;
   }
 
@@ -356,22 +288,19 @@ function mergeSalesHistory(currentRows) {
     history.sort(function (a, b) {
       var da = dateSortKey(a.date);
       var db = dateSortKey(b.date);
-      if (da !== db) return da - db;
-      if (a.time !== b.time) return a.time < b.time ? -1 : 1;
-      return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+      if (da !== db) return db - da;
+      if (a.time !== b.time) return a.time < b.time ? 1 : -1;
+
+      var ak = transactionBaseKey(a);
+      var bk = transactionBaseKey(b);
+      return ak < bk ? -1 : ak > bk ? 1 : 0;
     });
 
     if (history.length > SALES_HISTORY_MAX_ROWS) {
-      history = history.slice(history.length - SALES_HISTORY_MAX_ROWS);
+      history = history.slice(0, SALES_HISTORY_MAX_ROWS);
     }
 
-    var lines = [
-      "key\tdate\ttime\tplayer\titem\tquantity\titem_price\ttotal_meat"
-    ];
-
-    for (i = 0; i < history.length; i++) lines.push(historyRow(history[i]));
-
-    k.bufferToFile(lines.join("\n") + "\n", SALES_HISTORY_FILE);
+    writeSalesCsv(SALES_HISTORY_FILE, history);
   }
 
   return {
@@ -631,36 +560,46 @@ function renderPage(notice, needsRecentConfirm) {
   var changes = repricer.readChangeLog(200);
   var lastResult = k.getProperty("storeRepriceLastResult");
   var flaggedCount = 0;
-  var salesFetch;
   var currentSales = [];
   var historyRows = [];
   var historyAdded = 0;
   var salesError = "";
   var i;
+  var lastCaptureMs = Number(k.getProperty("mallManagerSalesLastCaptureMs")) || 0;
+  var lastCaptureCount =
+    Number(k.getProperty("mallManagerSalesLastCaptureCount")) || 0;
 
   try {
-    salesFetch = fetchCurrentSales();
-    currentSales = salesFetch.rows;
+    currentSales = readCurrentSales();
 
-    if (!currentSales.length) {
-      salesError =
-        "KoL Store Log loaded (" +
-        salesFetch.pageLength +
-        " chars), but no sale rows parsed. bought=" +
-        salesFetch.containsBought +
-        ", Meat=" +
-        salesFetch.containsMeat +
-        ". Existing saved history is still shown below.";
-    } else {
+    if (currentSales.length) {
       var merged = mergeSalesHistory(currentSales);
       historyRows = merged.rows;
       historyAdded = merged.added;
+    } else {
+      historyRows = readSalesHistory();
+
+      if (!lastCaptureMs) {
+        salesError =
+          "No Store Log CSV has been captured yet. Use Refresh sales dashboard to visit which=3 through the capture hook.";
+      } else if (lastCaptureCount > 0) {
+        salesError =
+          "The last backoffice capture reported " +
+          lastCaptureCount +
+          " sale(s), but data/" +
+          SALES_CURRENT_FILE +
+          " could not be read.";
+      }
     }
   } catch (e) {
-    salesError = "Sales refresh failed: " + String(e);
+    salesError =
+      "Sales CSV read/merge failed: " +
+      String(e) +
+      ". Existing data/" +
+      SALES_HISTORY_FILE +
+      " is left untouched.";
+    historyRows = readSalesHistory();
   }
-
-  if (!historyRows.length) historyRows = readSalesHistory();
 
   var currentStats = aggregateSales(currentSales);
   var historyStats = aggregateSales(historyRows);
@@ -672,7 +611,6 @@ function renderPage(notice, needsRecentConfirm) {
   }
 
   var html = [];
-  var refreshNonce = String(k.nowToInt());
 
   html.push("<!doctype html><html><head><meta charset='utf-8'>");
   html.push("<meta name='viewport' content='width=device-width,initial-scale=1'>");
@@ -710,16 +648,14 @@ function renderPage(notice, needsRecentConfirm) {
   }
 
   html.push("<div class='actions'>");
-  html.push("<form class='inline' method='get' action='" + SELF + "'>");
-  html.push("<input type='hidden' name='action' value='refresh'><input type='hidden' name='nonce' value='" + esc(refreshNonce) + "'>");
-  html.push("<button type='submit'>Refresh sales dashboard</button></form>");
+  html.push("<a class='btn' href='/backoffice.php?which=3&mallmanager_sync=1'>Refresh sales dashboard</a>");
   html.push("<form class='inline' method='post' action='" + SELF + "'><input type='hidden' name='action' value='run'><button type='submit'>Run repricer now</button></form>");
   html.push("<a class='btn secondary' href='/backoffice.php?which=3'>Native store log</a>");
   html.push("<a class='btn secondary' href='/backoffice.php?which=1'>Store inventory</a>");
   html.push("</div>");
 
   html.push("<div class='section'><div class='sectionhead'><div><h2>Sales overview</h2>");
-  html.push("<div class='kicker'>Saved locally from KoL's rolling Store Log (which=3). " + number(historyAdded) + " new transaction(s) captured on this refresh.</div></div></div><div class='sectionbody'>");
+  html.push("<div class='kicker'>CSV-backed history in data/" + SALES_HISTORY_FILE + ". " + number(historyAdded) + " new transaction(s) merged from data/" + SALES_CURRENT_FILE + ".</div></div></div><div class='sectionbody'>");
 
   html.push("<div class='summary'>");
   html.push("<div class='card'><div class='label'>Items sold</div><div class='metric'>" + number(historyStats.totals.units) + "</div></div>");
@@ -787,7 +723,7 @@ function renderPage(notice, needsRecentConfirm) {
 
   html.push("</tbody></table></div></div></div>");
 
-  html.push("<div class='section'><div class='sectionhead'><div><h2>Recent Store Transactions</h2><div class='kicker'>Directly parsed from backoffice.php?which=3 on this refresh.</div></div></div><div class='sectionbody'><div class='tablewrap'><table><thead><tr>");
+  html.push("<div class='section'><div class='sectionhead'><div><h2>Recent Store Transactions</h2><div class='kicker'>Current captured Store Log snapshot from data/" + SALES_CURRENT_FILE + ".</div></div></div><div class='sectionbody'><div class='tablewrap'><table><thead><tr>");
   html.push("<th>Date</th><th>Time</th><th>Player</th><th>Item</th><th>Qty</th><th>Item Price</th><th>Total Meat</th>");
   html.push("</tr></thead><tbody>");
 
@@ -836,7 +772,7 @@ function renderPage(notice, needsRecentConfirm) {
 
   html.push("</tbody></table></div></div></div>");
 
-  html.push("<div class='tiny'>Sales refreshes only KoL's Store Log and local history. It does not poll Pricegun or refresh mall prices. Pricegun/network price checks happen only when you explicitly run repricing or mall-clean.</div>");
+  html.push("<div class='tiny'>Sales are captured by relay/backoffice.ash into CSV, then this dashboard reads/merges the local files. No sales scraping is attempted from inside this relay page. Pricegun/network price checks happen only when you explicitly run repricing or mall-clean.</div>");
 
   html.push("<script>");
   html.push("function filterItems(){var q=(document.getElementById('itemSearch').value||'').toLowerCase();var rows=document.querySelectorAll('#itemDetailTable tbody tr');for(var i=0;i<rows.length;i++){var t=(rows[i].textContent||'').toLowerCase();rows[i].style.display=t.indexOf(q)>=0?'':'none';}}");
@@ -847,7 +783,8 @@ function renderPage(notice, needsRecentConfirm) {
   k.write(html.join(""));
 }
 
-module.exports.parseBackofficeSales = parseBackofficeSales;
+module.exports.parseCsvLine = parseCsvLine;
+module.exports.readSalesCsv = readSalesCsv;
 module.exports.aggregateSales = aggregateSales;
 
 module.exports.main = function main() {
@@ -856,8 +793,19 @@ module.exports.main = function main() {
   var notice = "";
   var needsRecentConfirm = false;
 
-  if (action === "refresh") {
-    notice = "Sales dashboard refreshed from KoL Store Log.";
+  var sync = fields && fields.sync ? String(fields.sync) : "";
+
+  if (sync === "ok") {
+    notice =
+      "Store Log captured to data/" +
+      SALES_CURRENT_FILE +
+      " (" +
+      (Number(k.getProperty("mallManagerSalesLastCaptureCount")) || 0) +
+      " transaction(s)); local history updated below.";
+  } else if (sync === "write_failed") {
+    notice = "Store Log loaded, but writing data/" + SALES_CURRENT_FILE + " failed.";
+  } else if (sync === "not_store_log") {
+    notice = "Backoffice capture hook ran, but the page did not look like the Store Log.";
   }
 
   if (action === "run") {
