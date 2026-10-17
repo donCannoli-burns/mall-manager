@@ -229,8 +229,8 @@ void main() {
 		contains_text(page_text, "Recent Store Activity") ||
 		count(sales) > 0;
 
-	boolean saved = true;
-	if (is_store_log) {
+	boolean saved = false;
+	if (is_store_log && count(sales) > 0) {
 		saved = write_current_csv(sales);
 	}
 
