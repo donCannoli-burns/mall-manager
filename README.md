@@ -138,7 +138,10 @@ For troubleshooting, every capture also saves a sanitized local copy of the exac
 data/mall-manager-backoffice-debug.html
 ```
 
-KoL `pwd` / `pwdhash` values are redacted before that file is written. The dashboard exposes live capture counts/CSV line counts and an **Export debug HTML** button. That browser-side export downloads the rendered Mall Manager page with the diagnostics, current CSV, history sample, and sanitized backoffice excerpt bundled into one HTML file.
+KoL `pwd` / `pwdhash` values are redacted before that file is written. The dashboard exposes live capture counts/CSV line counts plus two operator exports:
+
+- **Export HTML** downloads the current rendered Mall Manager dashboard as a standalone HTML snapshot, including the capture diagnostics section.
+- **Export CSV** downloads the full accumulated `data/mall-manager-sales.csv` ledger in the same 7-column analyzer-compatible format.
 
 Transactions are deduplicated by normalized date/time/player/item/quantity/total plus occurrence count, so legitimate duplicate-looking transactions in the same second are preserved while repeated Store Log captures are not re-added.
 
