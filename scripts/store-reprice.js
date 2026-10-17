@@ -503,10 +503,11 @@ function appendChangeLog(rowsToAdd) {
   k.bufferToFile(lines.join("\n") + "\n", CHANGE_LOG);
 }
 
-function runReprice(forceRecent) {
+function runReprice(forceRecent, preview) {
+  preview = !!preview;
   var state = getRunState();
 
-  if (state.recent && !forceRecent) {
+  if (!preview && state.recent && !forceRecent) {
     var ok = k.userConfirm(
       "Store repricer last completed " +
         formatDuration(state.ageMs) +
@@ -679,6 +680,54 @@ function runReprice(forceRecent) {
     });
   }
 
+  if (preview) {
+    for (i = 0; i < pending.length; i++) {
+      var sim = pending[i];
+      k.print(
+        "SIM REPRICE " +
+          sim.name +
+          ": " +
+          sim.oldPrice +
+          " -> " +
+          sim.targetPrice +
+          " Meat" +
+          (sim.pricegunValue > 0
+            ? " (Pricegun " +
+              Math.round(sim.pricegunValue) +
+              ", " +
+              sim.discrepancyRatio.toFixed(2) +
+              "x)"
+            : " (no usable Pricegun reference)")
+      );
+    }
+
+    var previewSummary =
+      "Reprice simulation: " +
+      pending.length +
+      " price change(s) would be applied, " +
+      flagged +
+      " Pricegun discrepancy flag(s) would stay unchanged, " +
+      unchanged +
+      " already at market, " +
+      skippedNoMarket +
+      " skipped for missing/stale mall data, " +
+      noPricegunReference +
+      " without a usable Pricegun reference. No store prices changed.";
+
+    k.print(previewSummary, "blue");
+
+    return {
+      ok: true,
+      preview: true,
+      candidates: pending.length,
+      flagged: flagged,
+      unchanged: unchanged,
+      skippedNoMarket: skippedNoMarket,
+      noPricegunReference: noPricegunReference,
+      message: previewSummary
+    };
+  }
+
   var batchOk = true;
 
   if (pending.length) {
@@ -784,6 +833,13 @@ module.exports.fetchPricegunValues = fetchPricegunValues;
 module.exports.pricegunDiscrepancy = pricegunDiscrepancy;
 
 module.exports.main = function main(command) {
-  var force = String(command || "").toLowerCase() === "force";
-  runReprice(force);
+  var cmd = String(command || "").toLowerCase();
+  var preview =
+    cmd.indexOf("preview") >= 0 ||
+    cmd.indexOf("sim") >= 0 ||
+    cmd.indexOf("test") >= 0 ||
+    cmd.indexOf("dry") >= 0;
+  var force = cmd.indexOf("force") >= 0;
+
+  runReprice(force, preview);
 };
