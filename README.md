@@ -109,11 +109,7 @@ backoffice.php?which=3
 
 Mall Manager does **not** scrape that page from inside the dashboard relay. Instead, `relay/backoffice.ash` is a small pass-through capture hook. KoLmafia's no-argument `visit_url()` retrieves the real native backoffice response, the hook parses the Store Log, writes a CSV snapshot, and then returns the native page unchanged.
 
-The **Refresh sales dashboard** button visits:
-
-```text
-/backoffice.php?which=3&mallmanager_sync=1
-```
+The **Refresh sales dashboard** button loads the Store Log through a hidden iframe, so the operator stays on Mall Manager while `relay/backoffice.ash` captures the page. When the hidden request finishes, the dashboard reloads itself.
 
 The capture hook writes:
 
@@ -135,6 +131,14 @@ Both CSVs use the analyzer-friendly schema:
 ```
 
 This also makes existing exports easy to import: place a compatible CSV at `data/mall-manager-sales.csv` and the dashboard will use it as historical seed data.
+
+For troubleshooting, every capture also saves a sanitized local copy of the exact backoffice response to:
+
+```text
+data/mall-manager-backoffice-debug.html
+```
+
+KoL `pwd` / `pwdhash` values are redacted before that file is written. The dashboard exposes live capture counts/CSV line counts and an **Export debug HTML** button. That browser-side export downloads the rendered Mall Manager page with the diagnostics, current CSV, history sample, and sanitized backoffice excerpt bundled into one HTML file.
 
 Transactions are deduplicated by normalized date/time/player/item/quantity/total plus occurrence count, so legitimate duplicate-looking transactions in the same second are preserved while repeated Store Log captures are not re-added.
 
