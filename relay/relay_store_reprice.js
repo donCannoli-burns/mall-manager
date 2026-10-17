@@ -297,6 +297,63 @@ function writeSalesCsv(filename, rows) {
   return k.bufferToFile(lines.join("\n") + "\n", filename);
 }
 
+function parseCapturedBackofficeHtml(html) {
+  var text = decodeBasicHtml(
+    String(html || "")
+      .replace(/<br\\s*\\/?\\s*>/gi, "\\n")
+      .replace(/<[^>]*>/g, " ")
+  );
+
+  var lines = text.split(/\\r?\\n/);
+  var rows = [];
+  var saleRe =
+    /(\\d{1,2}\\/\\d{1,2}\\/(?:\\d{2}|\\d{4}))\\s+(\\d{1,2}:\\d{2}:\\d{2})\\s+(.+?)\\s+bought\\s+([\\d,]+)\\s+\\((.*)\\)\\s+for\\s+([\\d,]+)\\s+Meat\\.?\\s*$/i;
+  var i;
+
+  for (i = 0; i < lines.length; i++) {
+    var line = trim(String(lines[i] || "").replace(/\\s+/g, " "));
+    if (!line) continue;
+
+    var m = saleRe.exec(line);
+    if (!m) continue;
+
+    var quantity = parseIntLoose(m[4]);
+    var totalMeat = parseIntLoose(m[6]);
+
+    if (!quantity || totalMeat < 0) continue;
+
+    rows.push({
+      date: trim(m[1]),
+      time: trim(m[2]),
+      player: trim(m[3]),
+      item: trim(m[5]),
+      quantity: quantity,
+      itemPrice: Math.round(totalMeat / quantity),
+      totalMeat: totalMeat
+    });
+  }
+
+  return rows;
+}
+
+function readCapturedBackofficeSales(lines) {
+  return parseCapturedBackofficeHtml((lines || []).join("\\n"));
+}
+
+function writeCurrentSalesFromCapture(rows) {
+  if (!rows || !rows.length) return false;
+
+  var ok = writeSalesCsv(SALES_CURRENT_FILE, rows);
+
+  if (ok && k.setProperty) {
+    k.setProperty("mallManagerSalesLastCaptureMs", String(k.nowToInt()));
+    k.setProperty("mallManagerSalesLastCaptureCount", String(rows.length));
+    k.setProperty("mallManagerSalesLastRelayParsedCount", String(rows.length));
+  }
+
+  return ok;
+}
+
 function readCurrentSales() {
   return readSalesCsv(SALES_CURRENT_FILE);
 }
@@ -621,6 +678,8 @@ function renderPage(notice, needsRecentConfirm) {
     Number(k.getProperty("mallManagerSalesLastHookPageChars")) || 0;
   var lastHookParsedCount =
     Number(k.getProperty("mallManagerSalesLastHookParsedCount")) || 0;
+  var lastRelayParsedCount =
+    Number(k.getProperty("mallManagerSalesLastRelayParsedCount")) || 0;
   var lastHookLookedLikeStoreLog =
     String(k.getProperty("mallManagerSalesLastHookLookedLikeStoreLog") || "");
   var lastHookWriteOk =
@@ -630,28 +689,33 @@ function renderPage(notice, needsRecentConfirm) {
   var backofficeDebugLines = safeFileLines(BACKOFFICE_DEBUG_FILE);
 
   try {
-    currentSales = readCurrentSales();
+    var relayParsedSales = readCapturedBackofficeSales(backofficeDebugLines);
+
+    if (relayParsedSales.length) {
+      writeCurrentSalesFromCapture(relayParsedSales);
+      currentSales = relayParsedSales;
+      lastRelayParsedCount = relayParsedSales.length;
+      lastCaptureMs = Number(k.getProperty("mallManagerSalesLastCaptureMs")) || lastCaptureMs;
+      lastCaptureCount = relayParsedSales.length;
+      currentRawLines = safeFileLines(SALES_CURRENT_FILE);
+    } else {
+      currentSales = readCurrentSales();
+    }
 
     if (currentSales.length) {
       var merged = mergeSalesHistory(currentSales);
       historyRows = merged.rows;
       historyAdded = merged.added;
+      historyRawLines = safeFileLines(SALES_HISTORY_FILE);
     } else {
       historyRows = readSalesHistory();
 
-      if (!lastCaptureMs) {
+      if (!backofficeDebugLines.length) {
         salesError =
-          "No Store Log CSV has been captured yet. Use Refresh sales dashboard to run the backoffice capture hook.";
-      } else if (lastCaptureCount === 0) {
+          "No Store Log capture exists yet. Use Refresh sales dashboard.";
+      } else {
         salesError =
-          "The capture hook ran, but it parsed 0 Store Log transactions. Use Export debug HTML and send me that file; it now includes the local CSV and sanitized backoffice capture.";
-      } else if (lastCaptureCount > 0) {
-        salesError =
-          "The last backoffice capture reported " +
-          lastCaptureCount +
-          " sale(s), but data/" +
-          SALES_CURRENT_FILE +
-          " parsed as 0 rows. Export debug HTML will include the exact CSV for diagnosis.";
+          "The Store Log capture exists, but the relay parser found 0 transactions. Export debug HTML and send me that file.";
       }
     }
   } catch (e) {
@@ -735,7 +799,8 @@ function renderPage(notice, needsRecentConfirm) {
   html.push("<div class='debuggrid'>");
   html.push("<div class='debugbox'><b>Last hook</b>" + esc(dateText(lastHookMs)) + "</div>");
   html.push("<div class='debugbox'><b>Hook page chars</b>" + number(lastHookPageChars) + "</div>");
-  html.push("<div class='debugbox'><b>Hook parsed rows</b>" + number(lastHookParsedCount) + "</div>");
+  html.push("<div class='debugbox'><b>ASH hook parsed rows</b>" + number(lastHookParsedCount) + "</div>");
+  html.push("<div class='debugbox'><b>Relay HTML parsed rows</b>" + number(lastRelayParsedCount) + "</div>");
   html.push("<div class='debugbox'><b>Current CSV parsed rows</b>" + number(currentSales.length) + "</div>");
   html.push("<div class='debugbox'><b>Current CSV lines</b>" + number(currentRawLines.length) + "</div>");
   html.push("<div class='debugbox'><b>History parsed rows</b>" + number(historyRows.length) + "</div>");
@@ -848,7 +913,7 @@ function renderPage(notice, needsRecentConfirm) {
 
   html.push("</tbody></table></div></div></div>");
 
-  html.push("<div class='tiny'>Sales are captured by relay/backoffice.ash into CSV, then this dashboard reads/merges the local files. No sales scraping is attempted from inside this relay page. Pricegun/network price checks happen only when you explicitly run repricing or mall-clean.</div>");
+  html.push("<div class='tiny'>Sales are captured by relay/backoffice.ash as sanitized HTML; this relay parses that capture into CSV, then reads/merges the local files. No sales scraping is attempted from inside this relay page. Pricegun/network price checks happen only when you explicitly run repricing or mall-clean.</div>");
 
   html.push("<details class='section debug' id='debugBundle'><summary>Capture diagnostics bundled into Export debug HTML</summary><div class='sectionbody'>");
   html.push("<p class='tiny'>This bundle is local diagnostic evidence. The backoffice hook redacts pwd/pwdhash values before saving its HTML capture.</p>");
@@ -857,6 +922,7 @@ function renderPage(notice, needsRecentConfirm) {
       "lastHook=" + dateText(lastHookMs) + "\n" +
       "lastHookPageChars=" + lastHookPageChars + "\n" +
       "lastHookParsedCount=" + lastHookParsedCount + "\n" +
+      "lastRelayParsedCount=" + lastRelayParsedCount + "\n" +
       "lastHookLookedLikeStoreLog=" + lastHookLookedLikeStoreLog + "\n" +
       "lastHookWriteOk=" + lastHookWriteOk + "\n" +
       "lastCapture=" + dateText(lastCaptureMs) + "\n" +
@@ -884,6 +950,7 @@ function renderPage(notice, needsRecentConfirm) {
   k.write(html.join(""));
 }
 
+module.exports.parseCapturedBackofficeHtml = parseCapturedBackofficeHtml;
 module.exports.parseCsvLine = parseCsvLine;
 module.exports.readSalesCsv = readSalesCsv;
 module.exports.aggregateSales = aggregateSales;
