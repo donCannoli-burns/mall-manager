@@ -97,7 +97,59 @@ Meaning:
 
 ## Relay dashboard
 
-`relay/relay_store_reprice.js` shows:
+`relay/relay_store_reprice.js` is the Mall Manager workbench.
+
+### Sales source and refresh
+
+Sales come from KoL's actual Store Log page:
+
+```text
+backoffice.php?which=3
+```
+
+The **Refresh sales dashboard** button uses an absolute relay-script URL plus a cache-busting nonce, then reparses the Store Log on every refresh.
+
+The parser follows KoL's longstanding transaction format:
+
+```text
+MM/DD/YY HH:MM:SS Player bought QTY (Item) for TOTAL Meat.
+```
+
+Each refresh merges newly observed transactions into:
+
+```text
+data/mall-manager-sales.tsv
+```
+
+Transactions are deduplicated using date/time/player/item/quantity/total plus an occurrence index, so the dashboard can accumulate history beyond KoL's rolling two-week Store Log.
+
+### Sales analytics
+
+The relay presents an analyzer-style dashboard with:
+
+- total items sold
+- unique buyers
+- transaction count
+- total Meat
+- distinct items sold
+- top/all buyers by items purchased
+- top/all items by quantity sold
+- top/all buyers by Meat
+- top/all items by Meat
+- items sold and Meat per day for the current Store Log window
+- monthly items/Meat trends from locally recorded history
+- complete per-item details:
+  - total sold
+  - total transactions
+  - average sold per transaction
+  - total Meat
+  - average price
+- searchable item details
+- recent raw Store Log transactions
+
+### Repricing panel
+
+The same relay also shows:
 
 - recent applied repricing changes
 - Pricegun discrepancy flags
@@ -106,7 +158,6 @@ Meaning:
 - Pricegun / mall ratio
 - actual applied price
 - source/status
-- recent KoL backoffice sales summary
 
 Flagged rows are visually highlighted and explicitly show that the existing store price was left unchanged.
 
