@@ -300,18 +300,18 @@ function writeSalesCsv(filename, rows) {
 function parseCapturedBackofficeHtml(html) {
   var text = decodeBasicHtml(
     String(html || "")
-      .replace(/<br\\s*\\/?\\s*>/gi, "\\n")
+      .replace(/<br\s*\/?\s*>/gi, "\n")
       .replace(/<[^>]*>/g, " ")
   );
 
-  var lines = text.split(/\\r?\\n/);
+  var lines = text.split(/\r?\n/);
   var rows = [];
   var saleRe =
-    /(\\d{1,2}\\/\\d{1,2}\\/(?:\\d{2}|\\d{4}))\\s+(\\d{1,2}:\\d{2}:\\d{2})\\s+(.+?)\\s+bought\\s+([\\d,]+)\\s+\\((.*)\\)\\s+for\\s+([\\d,]+)\\s+Meat\\.?\\s*$/i;
+    /(\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}))\s+(\d{1,2}:\d{2}:\d{2})\s+(.+?)\s+bought\s+([\d,]+)\s+\((.*)\)\s+for\s+([\d,]+)\s+Meat\.?\s*$/i;
   var i;
 
   for (i = 0; i < lines.length; i++) {
-    var line = trim(String(lines[i] || "").replace(/\\s+/g, " "));
+    var line = trim(String(lines[i] || "").replace(/\s+/g, " "));
     if (!line) continue;
 
     var m = saleRe.exec(line);
@@ -337,7 +337,7 @@ function parseCapturedBackofficeHtml(html) {
 }
 
 function readCapturedBackofficeSales(lines) {
-  return parseCapturedBackofficeHtml((lines || []).join("\\n"));
+  return parseCapturedBackofficeHtml((lines || []).join("\n"));
 }
 
 function writeCurrentSalesFromCapture(rows) {
