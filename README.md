@@ -110,10 +110,56 @@ Meaning:
 
 Flagged rows are visually highlighted and explicitly show that the existing store price was left unchanged.
 
+## Mall Clean
+
+`scripts/mall-clean.js` is derived from rlbond86's `mall_autosell.ash` behavior and keeps its basic cleanup defaults:
+
+- cleanup threshold: current mall price is within **5% above the legal mall minimum**
+- legal mall minimum: `max(100, 2 * autosell price)`
+- maximum mall price eligible for cleanup: **5,000 Meat**
+
+Mall Clean uses KoLmafia's current 5th-cheapest mall price and then applies the **same Pricegun discrepancy veto** as the repricer. A suspicious low mall price is flagged and left untouched rather than autosold.
+
+Preview safely before doing anything:
+
+```text
+call mall-clean.js preview
+```
+
+Live run:
+
+```text
+call mall-clean.js
+```
+
+The live run prints every candidate and every Pricegun flag, then requires one final confirmation before it removes anything from the store and autosells it. A completed live run also has its own 24-hour rerun guard.
+
+To bypass only the 24-hour guard while retaining the final destructive confirmation:
+
+```text
+call mall-clean.js force
+```
+
+Cleanup settings:
+
+```text
+set mallCleanThresholdFraction=0.05
+set mallCleanMaxMallPrice=5000
+```
+
+Mall Clean writes its audit trail to:
+
+```text
+data/mall-clean-log.tsv
+```
+
+The audit records mall minimum, cleanup threshold, current market price, Pricegun value/volume/ratio, disposition, and Meat actually gained.
+
 ## Files
 
 ```text
 scripts/store-reprice.js
+scripts/mall-clean.js
 relay/relay_store_reprice.js
 ```
 
