@@ -32,6 +32,7 @@ string strip_tags(string value) {
 }
 
 string normalize_space(string value) {
+	value = replace_string(value, "&nbsp;", " ");
 	return trim(replace_all(create_matcher("\\s+", value), " "));
 }
 
@@ -54,22 +55,58 @@ mall_sale[int] parse_store_log(buffer page) {
 			text
 		);
 
-		if (!m.find()) {
-			continue;
+		string sale_date;
+		string sale_time;
+		string sale_player;
+		string sale_item;
+		string sale_quantity;
+		string sale_total;
+
+		if (m.find()) {
+			sale_date = m.group(1);
+			sale_time = m.group(2);
+			sale_player = m.group(3);
+			sale_quantity = m.group(4);
+			sale_item = m.group(5);
+			sale_total = m.group(6);
+		} else {
+			// JimmyKing-style fallback: anchor on the timestamp and sale sentence.
+			matcher fallback = create_matcher(
+				"(\\d{1,2}:\\d{2}:\\d{2})\\s+" +
+				"(.+?)\\s+bought\\s+" +
+				"([\\d,]+)\\s+\\((.*?)\\)\\s+for\\s+([\\d,]+)",
+				text
+			);
+
+			if (!fallback.find()) {
+				continue;
+			}
+
+			matcher date_match = create_matcher(
+				"(\\d{1,2}/\\d{1,2}/(?:\\d{2}|\\d{4}))",
+				text
+			);
+
+			sale_date = date_match.find() ? date_match.group(1) : "";
+			sale_time = fallback.group(1);
+			sale_player = fallback.group(2);
+			sale_quantity = fallback.group(3);
+			sale_item = fallback.group(4);
+			sale_total = fallback.group(5);
 		}
 
-		int quantity = comma_int(m.group(4));
-		int total_meat = comma_int(m.group(6));
+		int quantity = comma_int(sale_quantity);
+		int total_meat = comma_int(sale_total);
 
 		if (quantity <= 0 || total_meat < 0) {
 			continue;
 		}
 
 		int n = count(sales);
-		sales[n].date = m.group(1);
-		sales[n].time = m.group(2);
-		sales[n].player = normalize_space(m.group(3));
-		sales[n].item_name = normalize_space(m.group(5));
+		sales[n].date = sale_date;
+		sales[n].time = sale_time;
+		sales[n].player = normalize_space(sale_player);
+		sales[n].item_name = normalize_space(sale_item);
 		sales[n].quantity = quantity;
 		sales[n].item_price = total_meat / quantity;
 		sales[n].total_meat = total_meat;
@@ -112,16 +149,18 @@ boolean write_current_csv(mall_sale[int] sales) {
 void main() {
 	buffer page = visit_url();
 
-	if (form_field("which") != "3") {
-		write(page);
-		return;
+	mall_sale[int] sales = parse_store_log(page);
+	boolean is_store_log =
+		page.contains_text("Recent Store Activity") ||
+		count(sales) > 0;
+
+	boolean saved = true;
+	if (is_store_log) {
+		saved = write_current_csv(sales);
 	}
 
-	mall_sale[int] sales = parse_store_log(page);
-	boolean saved = write_current_csv(sales);
-
 	if (form_field("mallmanager_sync") == "1") {
-		string status = saved ? "ok" : "write_failed";
+		string status = !is_store_log ? "not_store_log" : (saved ? "ok" : "write_failed");
 		write(
 			"<!doctype html><html><head>" +
 			"<meta charset='utf-8'>" +
