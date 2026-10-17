@@ -775,6 +775,14 @@ module.exports.formatDuration = formatDuration;
 module.exports.readChangeLog = readChangeLog;
 module.exports.runReprice = runReprice;
 
+// Shared, read-oriented market helpers used by mall-clean.js so the repricer
+// and cleaner cannot drift into different mall/Pricegun safety rules.
+module.exports.listStoreItems = listStoreItems;
+module.exports.refreshMallSnapshot = refreshMallSnapshot;
+module.exports.currentMarketPrice = currentMarketPrice;
+module.exports.fetchPricegunValues = fetchPricegunValues;
+module.exports.pricegunDiscrepancy = pricegunDiscrepancy;
+
 module.exports.main = function main(command) {
   var force = String(command || "").toLowerCase() === "force";
   runReprice(force);
