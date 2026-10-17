@@ -247,3 +247,15 @@ Existing rows in `data/store-reprice-changes.tsv` are preserved and labeled as l
 ## First live test
 
 For the first run after an update, it is still sensible to test with inexpensive inventory and inspect the relay's proposed/applied/flagged rows before relying on it for a high-value store.
+
+
+### Visual system
+
+The relay dashboard uses a dark material system inspired by the hierarchy/material separation in `es-3581100/math-by-design` without copying that project's reference palette or signature.
+
+- Reading text uses a sans-serif role; compact metadata and numeric evidence use monospace.
+- Lime is a low-frequency operator/accent signal, not a general text/background color.
+- Warm brass is reserved for high-value totals and chart center labels.
+- Major sections use whitespace and border rhythm before adding nested card chrome.
+- The top-level hero and KPI strip use asymmetric hierarchy; analytics collapse to a single column on narrow screens.
+- The page declares its own dark color scheme and includes `<meta name="darkreader-lock">` so Dark Reader does not recolor the intentionally dark relay UI and reduce chart/text contrast.
