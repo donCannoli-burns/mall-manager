@@ -42,6 +42,18 @@ int comma_int(string value) {
 	return replace_string(value, ",", "").to_int();
 }
 
+string sanitize_debug_html(string value) {
+	value = replace_all(create_matcher("pwd=[^&\\\"' <>]*", value), "pwd=REDACTED");
+	value = replace_all(create_matcher("pwdhash=[^&\\\"' <>]*", value), "pwdhash=REDACTED");
+	return value;
+}
+
+boolean write_debug_html(buffer page) {
+	buffer debug;
+	debug.append(sanitize_debug_html(page.to_string()));
+	return buffer_to_file(debug, "mall-manager-backoffice-debug.html");
+}
+
 mall_sale[int] parse_store_log(buffer page) {
 	mall_sale[int] sales;
 	string[int] chunks = split_string(page.to_string(), "Meat.");
@@ -151,6 +163,11 @@ boolean write_current_csv(mall_sale[int] sales) {
 void main() {
 	buffer page = visit_url();
 
+	// Always retain a sanitized local copy of the exact page the hook received.
+	// This is diagnostic evidence for parser failures and never contains the
+	// KoL pwd/pwdhash query values.
+	write_debug_html(page);
+
 	mall_sale[int] sales = parse_store_log(page);
 	string page_text = page.to_string();
 	boolean is_store_log =
@@ -162,18 +179,17 @@ void main() {
 		saved = write_current_csv(sales);
 	}
 
+	set_property("mallManagerSalesLastHookMs", now_to_int());
+	set_property("mallManagerSalesLastHookPageChars", length(page_text));
+	set_property("mallManagerSalesLastHookParsedCount", count(sales));
+	set_property("mallManagerSalesLastHookLookedLikeStoreLog", is_store_log ? "true" : "false");
+	set_property("mallManagerSalesLastHookWriteOk", saved ? "true" : "false");
+
+	// For Mall Manager's hidden-iframe refresh flow, do not attempt a redirect
+	// from inside this relay override. The parent dashboard reloads itself after
+	// this request finishes.
 	if (form_field("mallmanager_sync") == "1") {
-		string status = !is_store_log ? "not_store_log" : (saved ? "ok" : "write_failed");
-		write(
-			"<!doctype html><html><head>" +
-			"<meta charset='utf-8'>" +
-			"<meta http-equiv='refresh' content='0;url=/relay_store_reprice.js?sync=" + status + "'>" +
-			"<title>Mall Manager sales sync</title>" +
-			"</head><body>" +
-			"Captured " + count(sales) + " Store Log transaction(s). " +
-			"<a href='/relay_store_reprice.js?sync=" + status + "'>Return to Mall Manager</a>" +
-			"</body></html>"
-		);
+		write("Mall Manager sales capture complete.");
 		return;
 	}
 
