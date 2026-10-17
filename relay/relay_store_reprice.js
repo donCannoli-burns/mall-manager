@@ -543,6 +543,175 @@ function copySorted(rows, field) {
   return out;
 }
 
+var PIE_COLORS = [
+  "#6d5a5d",
+  "#786166",
+  "#5d5057",
+  "#84686c",
+  "#66565d",
+  "#725b62",
+  "#5a4c53",
+  "#8b6c70",
+  "#625159",
+  "#765f65"
+];
+
+function pieSeries(rows, valueKey, maxSlices) {
+  var sorted = copySorted(rows || [], valueKey);
+  var keep = Math.max(1, Number(maxSlices) || 10);
+  var out = sorted.slice(0, keep);
+  var i;
+
+  if (sorted.length > keep) {
+    var other = {
+      label: "Other",
+      units: 0,
+      transactions: 0,
+      meat: 0
+    };
+
+    for (i = keep; i < sorted.length; i++) {
+      other.units += Number(sorted[i].units || 0);
+      other.transactions += Number(sorted[i].transactions || 0);
+      other.meat += Number(sorted[i].meat || 0);
+    }
+
+    out.push(other);
+  }
+
+  return out;
+}
+
+function polarPoint(cx, cy, radius, degrees) {
+  var radians = (degrees - 90) * Math.PI / 180;
+  return {
+    x: cx + radius * Math.cos(radians),
+    y: cy + radius * Math.sin(radians)
+  };
+}
+
+function annularSectorPath(cx, cy, innerRadius, outerRadius, startDeg, endDeg) {
+  var outerStart = polarPoint(cx, cy, outerRadius, startDeg);
+  var outerEnd = polarPoint(cx, cy, outerRadius, endDeg);
+  var innerEnd = polarPoint(cx, cy, innerRadius, endDeg);
+  var innerStart = polarPoint(cx, cy, innerRadius, startDeg);
+  var largeArc = endDeg - startDeg > 180 ? 1 : 0;
+
+  return [
+    "M", outerStart.x.toFixed(2), outerStart.y.toFixed(2),
+    "A", outerRadius, outerRadius, 0, largeArc, 1,
+      outerEnd.x.toFixed(2), outerEnd.y.toFixed(2),
+    "L", innerEnd.x.toFixed(2), innerEnd.y.toFixed(2),
+    "A", innerRadius, innerRadius, 0, largeArc, 0,
+      innerStart.x.toFixed(2), innerStart.y.toFixed(2),
+    "Z"
+  ].join(" ");
+}
+
+function renderExplodedPie(title, rows, valueKey, centerLabel) {
+  var series = pieSeries(rows, valueKey, 9);
+  var total = 0;
+  var i;
+
+  for (i = 0; i < series.length; i++) {
+    total += Number(series[i][valueKey] || 0);
+  }
+
+  var html = [];
+  html.push("<div class='piecard'>");
+  html.push("<div class='pieheading'>" + esc(title) + "</div>");
+
+  if (!series.length || total <= 0) {
+    html.push("<div class='empty'>No chart data.</div></div>");
+    return html.join("");
+  }
+
+  var cx = 130;
+  var cy = 130;
+  var innerRadius = 71;
+  var outerRadius = 108;
+  var current = 0;
+
+  html.push("<div class='piebody'>");
+  html.push("<div class='piewrap'>");
+  html.push("<svg class='explodedpie' viewBox='0 0 260 260' role='img' aria-label='" + esc(title) + "'>");
+  html.push("<defs><filter id='pieShadow' x='-30%' y='-30%' width='160%' height='160%'><feDropShadow dx='0' dy='4' stdDeviation='4' flood-opacity='.28'/></filter></defs>");
+  html.push("<circle class='piebasehalo' cx='130' cy='130' r='82'></circle>");
+  html.push("<circle class='piebase' cx='130' cy='130' r='76'></circle>");
+
+  for (i = 0; i < series.length; i++) {
+    var row = series[i];
+    var value = Number(row[valueKey] || 0);
+    var fraction = value / total;
+    var sweep = fraction * 360;
+    var gap = Math.min(5.5, Math.max(1.4, sweep * 0.16));
+    var start = current + gap / 2;
+    var end = current + sweep - gap / 2;
+
+    if (end <= start) {
+      start = current;
+      end = current + sweep;
+    }
+
+    var mid = current + sweep / 2;
+    var unit = polarPoint(0, 0, 1, mid);
+    var baseOffset = 6;
+    var dx = unit.x * baseOffset;
+    var dy = unit.y * baseOffset;
+    var color = PIE_COLORS[i % PIE_COLORS.length];
+    var label = row.label || "Unknown";
+    var pct = (fraction * 100).toFixed(1);
+
+    html.push(
+      "<g class='pieslice' " +
+      "transform='translate(" + dx.toFixed(2) + " " + dy.toFixed(2) + ")' " +
+      "data-base-x='" + dx.toFixed(2) + "' " +
+      "data-base-y='" + dy.toFixed(2) + "' " +
+      "data-label='" + esc(label) + "' " +
+      "data-value='" + esc(value) + "' " +
+      "data-total='" + esc(total) + "' " +
+      "data-pct='" + esc(pct) + "' " +
+      "tabindex='0' " +
+      "onmouseenter='pieEnter(this,event)' " +
+      "onmousemove='pieMove(this,event)' " +
+      "onmouseleave='pieLeave(this)' " +
+      "onclick='piePin(this,event)' " +
+      "onfocus='pieFocus(this)' " +
+      "onblur='pieBlur(this)'>" +
+      "<title>" + esc(label) + ": " + number(value) + " (" + pct + "%)</title>" +
+      "<path d='" + annularSectorPath(cx, cy, innerRadius, outerRadius, start, end) + "' fill='" + color + "'></path>" +
+      "</g>"
+    );
+
+    current += sweep;
+  }
+
+  html.push("<circle class='piecenter' cx='130' cy='130' r='52'></circle>");
+  html.push("<text class='piecentervalue' x='130' y='126' text-anchor='middle'>" + number(total) + "</text>");
+  html.push("<text class='piecenterlabel' x='130' y='145' text-anchor='middle'>" + esc(centerLabel) + "</text>");
+  html.push("</svg>");
+  html.push("</div>");
+
+  html.push("<div class='pielegend'>");
+  for (i = 0; i < series.length; i++) {
+    var legendRow = series[i];
+    var legendValue = Number(legendRow[valueKey] || 0);
+    var legendPct = total ? (legendValue / total * 100).toFixed(1) : "0.0";
+    html.push(
+      "<div class='pielegendrow'>" +
+      "<span class='pielegenddot' style='background:" + PIE_COLORS[i % PIE_COLORS.length] + "'></span>" +
+      "<span class='pielegendlabel' title='" + esc(legendRow.label || "Unknown") + "'>" + esc(legendRow.label || "Unknown") + "</span>" +
+      "<span class='pielegendvalue'>" + number(legendValue) + "</span>" +
+      "<span class='pielegendpct'>" + legendPct + "%</span>" +
+      "</div>"
+    );
+  }
+  html.push("</div>");
+  html.push("</div></div>");
+
+  return html.join("");
+}
+
 function statusClass(status) {
   if (status === "flagged_discrepancy") return "flag";
   if (status === "verify_failed") return "bad";
@@ -758,7 +927,11 @@ function renderPage(notice, needsRecentConfirm) {
   html.push(".tablewrap{overflow:auto;max-height:520px;border:1px solid #30363d;border-radius:7px}.tablewrap.compact{max-height:350px;margin-top:14px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #2b3138;white-space:nowrap;font-variant-numeric:tabular-nums}th{position:sticky;top:0;background:#252a31;color:#dfe6ee;z-index:2;font-size:12px}td.name{white-space:normal;min-width:180px}tbody tr:hover{background:#20262d}");
   html.push(".good{color:var(--good);font-weight:700}.bad{color:var(--bad);font-weight:700}.flag{color:var(--warn);font-weight:800}.flagrow{background:#302b18}.muted,.tiny{color:var(--muted)}.tiny{font-size:12px}.empty{color:var(--muted);padding:12px 2px}.divider{height:1px;background:var(--line);margin:18px 0}");
   html.push(".search{width:min(420px,100%);background:#101317;color:#fff;border:1px solid #414851;border-radius:7px;padding:9px 11px}.kicker{font-size:12px;color:var(--muted);margin-top:3px}");
-  html.push("@media(max-width:950px){.summary{grid-template-columns:repeat(2,minmax(0,1fr))}.twocol{grid-template-columns:1fr}.debuggrid{grid-template-columns:repeat(2,minmax(0,1fr))}.wrap{padding:14px}.barrow{grid-template-columns:minmax(90px,1fr) minmax(90px,1.5fr) auto}}");
+  html.push(".piegrid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:18px 0}.piecard{background:linear-gradient(180deg,#20242a,#181c21);border:1px solid #343b44;border-radius:12px;padding:16px;box-shadow:0 12px 32px rgba(0,0,0,.16)}.pieheading{font-size:15px;font-weight:800;margin-bottom:10px}.piebody{display:grid;grid-template-columns:minmax(260px,320px) minmax(0,1fr);gap:14px;align-items:center}.piewrap{min-width:0}.explodedpie{display:block;width:100%;max-width:300px;margin:0 auto;overflow:visible}.piebasehalo{fill:#9bd621;opacity:.16;filter:drop-shadow(0 0 18px rgba(155,214,33,.34))}.piebase{fill:#95d11e;stroke:#b7ea45;stroke-width:1.5}.piecenter{fill:#9bd621;stroke:#b9eb50;stroke-width:1.5;filter:drop-shadow(0 3px 7px rgba(0,0,0,.22))}.piecentervalue{fill:#13200c;font-size:19px;font-weight:900}.piecenterlabel{fill:#304615;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.08em}.pieslice{cursor:pointer;filter:drop-shadow(0 5px 6px rgba(0,0,0,.22));transition:filter .15s ease}.pieslice path{stroke:#efe8e5;stroke-width:1.4;stroke-linejoin:round;transition:fill .15s ease,stroke-width .15s ease}.pieslice:hover path,.pieslice:focus path,.pieslice.pinned path{stroke:#fff;stroke-width:2.4}.pieslice:hover,.pieslice:focus,.pieslice.pinned{filter:drop-shadow(0 8px 9px rgba(0,0,0,.38))}.pielegend{display:flex;flex-direction:column;gap:6px;min-width:0}.pielegendrow{display:grid;grid-template-columns:12px minmax(0,1fr) auto auto;gap:8px;align-items:center;padding:6px 8px;border:1px solid #2f3740;border-radius:8px;background:#11161b}.pielegenddot{width:12px;height:12px;border-radius:50%;box-shadow:0 0 8px rgba(255,255,255,.09)}.pielegendlabel{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pielegendvalue{font-weight:800;font-variant-numeric:tabular-nums}.pielegendpct{color:var(--muted);font-variant-numeric:tabular-nums;min-width:48px;text-align:right}.pietooltip{position:fixed;z-index:9999;pointer-events:none;display:none;min-width:170px;max-width:280px;padding:10px 12px;border-radius:9px;background:rgba(12,16,20,.96);border:1px solid #4a5562;box-shadow:0 14px 34px rgba(0,0,0,.4);color:#f4f4f4}.pietooltip b{display:block;margin-bottom:4px}.pietooltip .tiny{display:block}");
+
+  html.push("@media(max-width:1100px){.piebody{grid-template-columns:1fr}.pielegend{display:grid;grid-template-columns:1fr 1fr}}");
+  html.push("@media(max-width:950px){.summary{grid-template-columns:repeat(2,minmax(0,1fr))}.twocol,.piegrid{grid-template-columns:1fr}.debuggrid{grid-template-columns:repeat(2,minmax(0,1fr))}.wrap{padding:14px}.barrow{grid-template-columns:minmax(90px,1fr) minmax(90px,1.5fr) auto}}");
+  html.push("@media(max-width:600px){.pielegend{grid-template-columns:1fr}.piebody{gap:8px}}");
   html.push("</style></head><body><div class='wrap'>");
 
   html.push("<div class='hero'><h1>Mall Manager</h1>");
@@ -809,6 +982,15 @@ function renderPage(notice, needsRecentConfirm) {
   html.push("<div class='debugbox'><b>CSV write OK</b>" + esc(lastHookWriteOk || "unknown") + "</div>");
   html.push("</div>");
   html.push("</div></div>");
+
+  html.push("<div class='section'><div class='sectionhead'><div><h2>Sales distribution</h2><div class='kicker'>Exploded SVG pies — hover to inspect, click a slice to pin it.</div></div></div><div class='sectionbody'>");
+  html.push("<div class='piegrid'>");
+  html.push(renderExplodedPie("Top Buyers by Items Purchased", historyStats.buyers, "units", "items"));
+  html.push(renderExplodedPie("Top Items Sold", historyStats.items, "units", "items"));
+  html.push(renderExplodedPie("Top Buyers by Meat", historyBuyersByMeat, "meat", "Meat"));
+  html.push(renderExplodedPie("Top Items by Meat", historyItemsByMeat, "meat", "Meat"));
+  html.push("</div></div></div>");
+  html.push("<div id='pieTooltip' class='pietooltip'></div>");
 
   html.push("<div class='twocol'>");
 
@@ -942,6 +1124,16 @@ function renderPage(notice, needsRecentConfirm) {
   html.push("<textarea id='salesCsvExportData' style='display:none' aria-hidden='true'>" + esc(historyRawLines.join("\n")) + "</textarea>");
 
   html.push("<script>");
+  html.push("var pinnedPieSlice=null;");
+  html.push("function pieExpand(el,mult){var x=parseFloat(el.getAttribute('data-base-x')||'0');var y=parseFloat(el.getAttribute('data-base-y')||'0');el.setAttribute('transform','translate('+(x*mult).toFixed(2)+' '+(y*mult).toFixed(2)+')');}");
+  html.push("function pieTip(el,event){var tip=document.getElementById('pieTooltip');if(!tip)return;var label=el.getAttribute('data-label')||'';var value=Number(el.getAttribute('data-value')||0);var pct=el.getAttribute('data-pct')||'0.0';tip.innerHTML='<b>'+label.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</b><span>'+value.toLocaleString()+' · '+pct+'%</span><span class=\'tiny\'>Click to pin / unpin</span>';tip.style.display='block';if(event&&event.clientX!==undefined){tip.style.left=Math.min(window.innerWidth-300,event.clientX+16)+'px';tip.style.top=Math.min(window.innerHeight-110,event.clientY+16)+'px';}}");
+  html.push("function pieEnter(el,event){if(el!==pinnedPieSlice)pieExpand(el,2.15);pieTip(el,event);}");
+  html.push("function pieMove(el,event){pieTip(el,event);}");
+  html.push("function pieLeave(el){if(el!==pinnedPieSlice)pieExpand(el,1);var tip=document.getElementById('pieTooltip');if(tip&&el!==pinnedPieSlice)tip.style.display='none';}");
+  html.push("function piePin(el,event){if(pinnedPieSlice&&pinnedPieSlice!==el){pinnedPieSlice.classList.remove('pinned');pinnedPieSlice.setAttribute('data-pinned','0');pieExpand(pinnedPieSlice,1);}if(pinnedPieSlice===el){el.classList.remove('pinned');el.setAttribute('data-pinned','0');pieExpand(el,1);pinnedPieSlice=null;var tip=document.getElementById('pieTooltip');if(tip)tip.style.display='none';return;}pinnedPieSlice=el;el.classList.add('pinned');el.setAttribute('data-pinned','1');pieExpand(el,2.15);pieTip(el,event);}");
+  html.push("function pieFocus(el){if(el!==pinnedPieSlice)pieExpand(el,2.15);pieTip(el,null);}");
+  html.push("function pieBlur(el){if(el!==pinnedPieSlice)pieExpand(el,1);var tip=document.getElementById('pieTooltip');if(tip&&el!==pinnedPieSlice)tip.style.display='none';}");
+  html.push("document.addEventListener('click',function(event){if(!pinnedPieSlice)return;if(event.target.closest&&event.target.closest('.pieslice'))return;pinnedPieSlice.classList.remove('pinned');pieExpand(pinnedPieSlice,1);pinnedPieSlice=null;var tip=document.getElementById('pieTooltip');if(tip)tip.style.display='none';});");
   html.push("function filterItems(){var q=(document.getElementById('itemSearch').value||'').toLowerCase();var rows=document.querySelectorAll('#itemDetailTable tbody tr');for(var i=0;i<rows.length;i++){var t=(rows[i].textContent||'').toLowerCase();rows[i].style.display=t.indexOf(q)>=0?'':'none';}}");
   html.push("function syncSales(){var f=document.getElementById('salesSyncFrame');var b=document.getElementById('syncSalesButton');var s=document.getElementById('syncSalesStatus');if(!f)return;f.dataset.active='1';if(b)b.disabled=true;if(s)s.textContent='Capturing Store Log to CSV…';f.src='/backoffice.php?which=3&mallmanager_sync=1&_mm='+Date.now();}");
   html.push("function salesSyncLoaded(){var f=document.getElementById('salesSyncFrame');if(!f||f.dataset.active!=='1')return;f.dataset.active='0';var s=document.getElementById('syncSalesStatus');if(s)s.textContent='Capture finished; reloading dashboard…';window.setTimeout(function(){window.location.reload();},100);}");
